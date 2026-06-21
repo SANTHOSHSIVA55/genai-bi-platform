@@ -7,7 +7,11 @@ load_dotenv()
 
 # Use SQLite by default (zero-config, works everywhere)
 # Set DATABASE_URL env var to switch to PostgreSQL in production
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "genai_bi.db")
+if os.getenv("VERCEL"):
+    DB_PATH = "/tmp/genai_bi.db"
+else:
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "genai_bi.db")
+
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
 
 # SQLite needs check_same_thread=False for FastAPI
