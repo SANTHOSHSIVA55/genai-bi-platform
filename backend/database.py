@@ -34,6 +34,6 @@ def get_db():
 
 def init_db():
     """Create all tables."""
-    from models import User, Dataset, QueryLog  # noqa: F401
+    from models import User, Dataset, QueryLog, AuthLog  # noqa: F401
     Base.metadata.create_all(bind=engine)
     print(f"[DB] Database initialized: {DATABASE_URL}")

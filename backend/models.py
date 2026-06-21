@@ -56,3 +56,17 @@ class QueryLog(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="queries")
+
+
+class AuthLog(Base):
+    __tablename__ = "auth_logs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email = Column(String(255), nullable=False, index=True)
+    username = Column(String(100), nullable=True, index=True)
+    attempt_type = Column(String(50), nullable=False)  # "login" or "register"
+    is_successful = Column(Boolean, default=False, nullable=False)
+    error_message = Column(String(255), nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+

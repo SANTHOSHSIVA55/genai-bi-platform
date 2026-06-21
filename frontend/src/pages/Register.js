@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Sparkles, Mail, Lock, User, Loader2, Eye, EyeOff, ArrowLeft } from 'lucide-react';
+import { Sparkles, Mail, Lock, User, Loader2, Eye, EyeOff, ArrowLeft, AlertTriangle } from 'lucide-react';
 import { registerUser } from '../api/api';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
@@ -14,12 +14,15 @@ const Register = () => {
   const [confirmPass, setConfirmPass] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const { login } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
     if (password !== confirmPass) {
+      setError('Passwords do not match');
       toast.error('Passwords do not match');
       return;
     }
@@ -30,7 +33,9 @@ const Register = () => {
       toast.success('Account created successfully!');
       navigate('/dashboard');
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Registration failed');
+      const errorMsg = err.response?.data?.detail || 'Registration failed';
+      setError(errorMsg);
+      toast.error(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -70,6 +75,16 @@ const Register = () => {
 
         <div className="glass-card p-6 sm:p-8">
           <form onSubmit={handleSubmit} className="space-y-5">
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="p-4 rounded-lg bg-red-950/50 border border-red-500/30 text-red-200 text-sm font-semibold flex items-center gap-2"
+              >
+                <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
+                <span>{error}</span>
+              </motion.div>
+            )}
             <div>
               <label className="block text-sm font-medium text-dark-300 mb-2">Username</label>
               <div className="relative">

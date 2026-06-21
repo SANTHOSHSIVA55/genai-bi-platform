@@ -4,14 +4,14 @@ import uuid
 from typing import List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from dotenv import load_dotenv
 
 from database import get_db, init_db, engine
-from models import User, Dataset, QueryLog
+from models import User, Dataset, QueryLog, AuthLog
 from schemas import (
     UserCreate, UserLogin, UserResponse, TokenResponse,
     DatasetResponse, DatasetListResponse,
@@ -58,12 +58,35 @@ app.add_middleware(
 # ──────────────────────────────────────────────
 
 @app.post("/api/auth/register", response_model=TokenResponse, tags=["Auth"])
-def register(body: UserCreate, db: Session = Depends(get_db)):
+def register(body: UserCreate, request: Request, db: Session = Depends(get_db)):
+    ip_addr = request.client.host if request.client else None
+    
     # Check existing email
     if db.query(User).filter(User.email == body.email).first():
+        log = AuthLog(
+            email=body.email,
+            username=body.username,
+            attempt_type="register",
+            is_successful=False,
+            error_message="Email already registered",
+            ip_address=ip_addr
+        )
+        db.add(log)
+        db.commit()
         raise HTTPException(status_code=400, detail="Email already registered")
+        
     # Check existing username
     if db.query(User).filter(User.username == body.username).first():
+        log = AuthLog(
+            email=body.email,
+            username=body.username,
+            attempt_type="register",
+            is_successful=False,
+            error_message="Username already taken",
+            ip_address=ip_addr
+        )
+        db.add(log)
+        db.commit()
         raise HTTPException(status_code=400, detail="Username already taken")
 
     user = User(
@@ -77,6 +100,16 @@ def register(body: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
+    log = AuthLog(
+        email=body.email,
+        username=body.username,
+        attempt_type="register",
+        is_successful=True,
+        ip_address=ip_addr
+    )
+    db.add(log)
+    db.commit()
+
     token = create_access_token({"sub": user.id, "role": user.role})
     return TokenResponse(
         access_token=token,
@@ -85,12 +118,45 @@ def register(body: UserCreate, db: Session = Depends(get_db)):
 
 
 @app.post("/api/auth/login", response_model=TokenResponse, tags=["Auth"])
-def login(body: UserLogin, db: Session = Depends(get_db)):
+def login(body: UserLogin, request: Request, db: Session = Depends(get_db)):
+    ip_addr = request.client.host if request.client else None
     user = db.query(User).filter(User.email == body.email).first()
+    
     if not user or not verify_password(body.password, user.hashed_password):
+        log = AuthLog(
+            email=body.email,
+            username=user.username if user else None,
+            attempt_type="login",
+            is_successful=False,
+            error_message="Invalid credentials",
+            ip_address=ip_addr
+        )
+        db.add(log)
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
+        
     if not user.is_active:
+        log = AuthLog(
+            email=body.email,
+            username=user.username,
+            attempt_type="login",
+            is_successful=False,
+            error_message="Account disabled",
+            ip_address=ip_addr
+        )
+        db.add(log)
+        db.commit()
         raise HTTPException(status_code=403, detail="Account disabled")
+
+    log = AuthLog(
+        email=body.email,
+        username=user.username,
+        attempt_type="login",
+        is_successful=True,
+        ip_address=ip_addr
+    )
+    db.add(log)
+    db.commit()
 
     token = create_access_token({"sub": user.id, "role": user.role})
     return TokenResponse(
