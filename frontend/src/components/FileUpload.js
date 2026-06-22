@@ -44,7 +44,8 @@ const FileUpload = ({ onUploadSuccess }) => {
       setDatasetName('');
       if (onUploadSuccess) onUploadSuccess(res.data);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Upload failed');
+      const msg = err.response?.data?.detail || err.message || 'Upload failed';
+      toast.error(typeof msg === 'string' ? msg : 'Upload failed. Please try again.');
     } finally {
       setUploading(false);
     }

@@ -78,7 +78,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna(axis=1, how="all")
 
     # 3. Remove duplicate rows
-    before_dup = len(df)
     df = df.drop_duplicates()
 
     # 4. Handle missing values per column
@@ -88,10 +87,21 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             df = df.drop(columns=[col])
             continue
 
-        if df[col].dtype in ("float64", "int64"):
-            df[col] = df[col].fillna(df[col].median())
-        else:
-            df[col] = df[col].fillna(df[col].mode().iloc[0] if not df[col].mode().empty else "Unknown")
+        try:
+            if df[col].dtype in ("float64", "int64"):
+                median_val = df[col].median()
+                if pd.isna(median_val):
+                    df[col] = df[col].fillna(0)
+                else:
+                    df[col] = df[col].fillna(median_val)
+            else:
+                mode_vals = df[col].mode()
+                if not mode_vals.empty:
+                    df[col] = df[col].fillna(mode_vals.iloc[0])
+                else:
+                    df[col] = df[col].fillna("Unknown")
+        except Exception:
+            df[col] = df[col].fillna("Unknown")
 
     # 5. Standardize dates
     for col in df.columns:
@@ -99,22 +109,32 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             try:
                 parsed = pd.to_datetime(df[col], errors="coerce")
                 if parsed.notna().mean() > 0.7:
-                    df[col] = parsed
+                    df[col] = parsed.dt.strftime("%Y-%m-%d %H:%M:%S")
             except Exception:
                 pass
 
     # 6. Strip whitespace in string columns
     for col in df.select_dtypes(include=["object"]).columns:
-        df[col] = df[col].str.strip()
+        try:
+            df[col] = df[col].str.strip()
+        except Exception:
+            pass
 
     # 7. Normalize numeric strings
     for col in df.select_dtypes(include=["object"]).columns:
         try:
-            numeric = pd.to_numeric(df[col].str.replace(",", ""), errors="coerce")
+            cleaned = df[col].str.replace(",", "", regex=False)
+            numeric = pd.to_numeric(cleaned, errors="coerce")
             if numeric.notna().mean() > 0.8:
                 df[col] = numeric
         except Exception:
             pass
+
+    # 8. Replace inf with NaN, then fill
+    import numpy as np
+    df = df.replace([np.inf, -np.inf], np.nan)
+    for col in df.select_dtypes(include=["float64", "int64"]).columns:
+        df[col] = df[col].fillna(0)
 
     df = df.reset_index(drop=True)
     return df

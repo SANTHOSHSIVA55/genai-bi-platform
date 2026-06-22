@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import math
 from typing import List
 from contextlib import asynccontextmanager
 
@@ -27,6 +28,12 @@ from ai_engine import nl_to_sql, detect_chart_type, generate_insights
 
 load_dotenv()
 
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://0.0.0.0:3000",
+]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -42,11 +49,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://0.0.0.0:3000",
-    ],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -188,61 +191,29 @@ async def upload_dataset(
 
     content = await file.read()
     file_size = len(content)
-    if file_size > 50 * 1024 * 1024:  # 50MB limit
+    if file_size > 50 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 50MB)")
 
-    df = read_uploaded_file(content, file.filename)
-    df = clean_dataframe(df)
+    try:
+        df = read_uploaded_file(content, file.filename)
+        df = clean_dataframe(df)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
+
+    if df.empty:
+        raise HTTPException(status_code=400, detail="File contains no valid data after cleaning")
 
     table_id = str(uuid.uuid4()).replace("-", "")[:12]
     table_name = f"ds_{table_id}"
     dataset_name = name or file.filename.rsplit(".", 1)[0]
 
-    # Create table dynamically
-    col_defs = []
-    for col in df.columns:
-        safe_col = sanitize_column_name(col)
-        if df[col].dtype in ("int64", "int32"):
-            col_defs.append(f'"{safe_col}" INTEGER')
-        elif df[col].dtype in ("float64", "float32"):
-            col_defs.append(f'"{safe_col}" REAL')
-        elif str(df[col].dtype).startswith("datetime"):
-            col_defs.append(f'"{safe_col}" TEXT')  # SQLite stores dates as TEXT
-        else:
-            col_defs.append(f'"{safe_col}" TEXT')
+    try:
+        df.to_sql(table_name, engine, if_exists="replace", index=False, chunksize=500)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to store data: {str(e)}")
 
-    create_sql = f'CREATE TABLE IF NOT EXISTS "{table_name}" ({", ".join(col_defs)})'
-
-    with engine.connect() as conn:
-        conn.execute(text(create_sql))
-        conn.commit()
-
-        # Insert data in batches
-        df.columns = [sanitize_column_name(c) for c in df.columns]
-        for start in range(0, len(df), 500):
-            batch = df.iloc[start:start + 500]
-            for _, row in batch.iterrows():
-                cols_str = ", ".join(f'"{c}"' for c in batch.columns)
-                vals = []
-                for c in batch.columns:
-                    v = row[c]
-                    if v is None or (hasattr(v, '__class__') and v.__class__.__name__ == 'NaTType'):
-                        vals.append("NULL")
-                    elif isinstance(v, (int, float)):
-                        import math
-                        if math.isnan(v):
-                            vals.append("NULL")
-                        else:
-                            vals.append(str(v))
-                    else:
-                        escaped = str(v).replace("'", "''")
-                        vals.append(f"'{escaped}'")
-                vals_str = ", ".join(vals)
-                insert_sql = f'INSERT INTO "{table_name}" ({cols_str}) VALUES ({vals_str})'
-                conn.execute(text(insert_sql))
-        conn.commit()
-
-    # Save dataset metadata
     columns_info = get_column_info(df)
     dataset = Dataset(
         id=str(uuid.uuid4()),
