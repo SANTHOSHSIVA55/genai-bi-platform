@@ -1,37 +1,12 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthProvider } from './context/AuthContext';
 import Landing from './pages/Landing';
-import Login from './pages/Login';
-import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import UploadPage from './pages/UploadPage';
 import HistoryPage from './pages/HistoryPage';
 import Navbar from './components/Navbar';
-
-/* Private route wrapper */
-const PrivateRoute = ({ children }) => {
-  const { user, loading } = useAuth();
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-dark-950">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
-          <p className="text-dark-400 text-sm">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-  return user ? children : <Navigate to="/login" />;
-};
-
-/* Public-only route (redirects logged-in users) */
-const PublicRoute = ({ children }) => {
-  const { user, loading } = useAuth();
-  if (loading) return null;
-  return user ? <Navigate to="/dashboard" /> : children;
-};
 
 /* Layout with Navbar */
 const AppLayout = ({ children }) => (
@@ -60,17 +35,15 @@ const App = () => (
         }}
       />
       <Routes>
-        {/* Public */}
-        <Route path="/" element={<PublicRoute><Landing /></PublicRoute>} />
-        <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
-        <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
+        {/* Public Routes */}
+        <Route path="/" element={<Landing />} />
+        <Route path="/dashboard" element={<AppLayout><Dashboard /></AppLayout>} />
+        <Route path="/upload" element={<AppLayout><UploadPage /></AppLayout>} />
+        <Route path="/history" element={<AppLayout><HistoryPage /></AppLayout>} />
 
-        {/* Private */}
-        <Route path="/dashboard" element={<PrivateRoute><AppLayout><Dashboard /></AppLayout></PrivateRoute>} />
-        <Route path="/upload" element={<PrivateRoute><AppLayout><UploadPage /></AppLayout></PrivateRoute>} />
-        <Route path="/history" element={<PrivateRoute><AppLayout><HistoryPage /></AppLayout></PrivateRoute>} />
-
-        {/* Catch-all */}
+        {/* Catch-all & Auth redirects to dashboard */}
+        <Route path="/login" element={<Navigate to="/dashboard" />} />
+        <Route path="/register" element={<Navigate to="/dashboard" />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Router>

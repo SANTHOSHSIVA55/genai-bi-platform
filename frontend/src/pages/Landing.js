@@ -126,7 +126,7 @@ const Landing = () => {
             className="flex flex-col sm:flex-row gap-4 justify-center items-center"
           >
             <Link
-              to="/register"
+              to="/dashboard"
               id="hero-cta-register"
               className="group btn-primary text-lg px-8 py-4 flex items-center gap-3 animate-pulse-ring"
             >
@@ -134,7 +134,7 @@ const Landing = () => {
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </Link>
             <Link
-              to="/login"
+              to="/dashboard"
               id="hero-cta-login"
               className="btn-secondary text-lg px-8 py-4 flex items-center gap-3"
             >
@@ -312,7 +312,7 @@ const Landing = () => {
                 Join thousands of analysts who've replaced complex SQL with simple conversations.
               </p>
               <Link
-                to="/register"
+                to="/dashboard"
                 id="cta-register"
                 className="btn-primary text-lg px-10 py-4 inline-flex items-center gap-3"
               >
