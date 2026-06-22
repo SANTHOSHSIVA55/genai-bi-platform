@@ -197,7 +197,12 @@ def detect_chart_type(question: str, columns: list, data_sample: list) -> dict:
     """Auto-detect chart type. Uses OpenAI if available, else smart heuristic."""
     if USE_AI:
         system_prompt = """You are a data visualization expert. Return a JSON object with:
-{"chart_type": "bar"|"line"|"pie"|"table", "x_axis": "col", "y_axis": "col", "title": "Title"}
+{"chart_type": "bar"|"line"|"pie"|"area"|"table", "x_axis": "col", "y_axis": "col", "title": "Title"}
+Rules:
+- Use "pie" only for categorical data with few groups (2-8)
+- Use "line" or "area" for time-series or ordered data
+- Use "bar" for comparisons across categories
+- Use "table" for complex multi-column data
 Return ONLY JSON, no markdown."""
         user_msg = f"Question: {question}\nColumns: {json.dumps(columns)}\nSample: {json.dumps(data_sample[:3])}"
         result = _chat(system_prompt, user_msg)
@@ -205,44 +210,75 @@ Return ONLY JSON, no markdown."""
             try:
                 result = re.sub(r"```json\s*", "", result)
                 result = re.sub(r"```\s*", "", result)
-                return json.loads(result)
+                parsed = json.loads(result)
+                if parsed.get("chart_type") in ("bar", "line", "pie", "area", "table"):
+                    return parsed
             except json.JSONDecodeError:
                 pass
 
-    # Local heuristic
+    # ─── Local heuristic ───
     q = question.lower()
-    x_axis = columns[0] if columns else ""
-    y_axis = columns[1] if len(columns) > 1 else columns[0] if columns else ""
 
-    # Detect numeric columns from data
+    # Classify columns by type from data
     numeric_cols = []
     text_cols = []
+    date_cols = []
     if data_sample:
         for col in columns:
-            val = data_sample[0].get(col)
-            if isinstance(val, (int, float)):
+            vals = [row.get(col) for row in data_sample if row.get(col) is not None]
+            if not vals:
+                continue
+            sample_val = vals[0]
+            col_lower = col.lower()
+            if any(kw in col_lower for kw in ("date", "time", "day", "month", "year", "quarter", "week")):
+                date_cols.append(col)
+            elif isinstance(sample_val, (int, float)):
                 numeric_cols.append(col)
             else:
                 text_cols.append(col)
 
+    # Pick axes
+    x_axis = columns[0] if columns else ""
+    y_axis = columns[1] if len(columns) > 1 else columns[0] if columns else ""
+
     if text_cols:
         x_axis = text_cols[0]
+    elif date_cols:
+        x_axis = date_cols[0]
     if numeric_cols:
         y_axis = numeric_cols[0]
 
+    # Detect chart type from question keywords
     chart_type = "table"
-    if any(w in q for w in ["percentage", "distribution", "share", "proportion", "breakdown"]):
+
+    if any(w in q for w in ["percentage", "distribution", "share", "proportion", "breakdown", "composition"]):
         chart_type = "pie"
-    elif any(w in q for w in ["trend", "over time", "monthly", "weekly", "daily", "timeline"]):
-        chart_type = "line"
-    elif any(w in q for w in ["top", "bottom", "compare", "by", "per", "highest", "lowest", "best", "worst"]):
+    elif any(w in q for w in ["trend", "over time", "monthly", "weekly", "daily", "timeline", "growth"]):
+        chart_type = "line" if len(data_sample) > 5 else "bar"
+    elif any(w in q for w in ["area", "cumulative", "stacked"]):
+        chart_type = "area"
+    elif any(w in q for w in ["top", "bottom", "compare", "by", "per", "highest", "lowest", "best", "worst", "rank"]):
         chart_type = "bar"
-    elif len(columns) == 2 and numeric_cols:
+    elif any(w in q for w in ["show", "list", "display", "get", "find"]):
+        if len(numeric_cols) >= 1 and (text_cols or date_cols):
+            chart_type = "bar"
+        elif len(columns) <= 3:
+            chart_type = "bar"
+    elif len(numeric_cols) >= 1 and (text_cols or date_cols):
         chart_type = "bar"
     elif len(data_sample) <= 1:
         chart_type = "table"
 
-    title = question.capitalize() if len(question) < 60 else question[:57] + "..."
+    # Refine pie: only if few categories
+    if chart_type == "pie" and text_cols:
+        unique_vals = set(row.get(text_cols[0]) for row in data_sample if row.get(text_cols[0]) is not None)
+        if len(unique_vals) > 10:
+            chart_type = "bar"
+
+    # Title
+    title = question.strip().capitalize()
+    if len(title) > 60:
+        title = title[:57] + "..."
 
     return {
         "chart_type": chart_type,
@@ -258,8 +294,14 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
     if USE_AI:
         system_prompt = """You are a senior business analyst AI. Return a JSON object:
 {"executive_summary": ["...", "..."], "recommendations": ["...", "..."], "risks": ["...", "..."], "follow_up_questions": ["...", "..."]}
-Be specific to the data. Return ONLY JSON, no markdown."""
-        user_msg = f"Question: {question}\nColumns: {json.dumps(columns)}\nData: {json.dumps(data_sample[:15])}\nTotal rows: {len(data_sample)}"
+Rules:
+- Be specific: reference actual values, column names, and numbers from the data
+- Keep executive_summary to 3-5 items, each 1-2 sentences
+- Keep recommendations to 3 actionable items
+- Keep risks to 2 items
+- Follow-up questions should be specific and drillable
+Return ONLY JSON, no markdown."""
+        user_msg = f"Question: {question}\nColumns: {json.dumps(columns)}\nData (first 15 rows): {json.dumps(data_sample[:15])}\nTotal rows: {len(data_sample)}"
         result = _chat(system_prompt, user_msg, temperature=0.4)
         if result and not result.startswith("AI_ERROR"):
             try:
@@ -275,51 +317,87 @@ Be specific to the data. Return ONLY JSON, no markdown."""
             except json.JSONDecodeError:
                 pass
 
-    # ─── Local insights generation ───
+    # ─── Smart local insights generation ───
     num_rows = len(data_sample)
     num_cols = len(columns)
 
-    # Extract some stats from data
-    summaries = [
-        f"Query returned {num_rows} row{'s' if num_rows != 1 else ''} across {num_cols} column{'s' if num_cols != 1 else ''}.",
-    ]
+    summaries = []
+    recommendations = []
+    risks = []
+    follow_ups = []
 
-    # Try to find numeric columns and compute basic stats
+    # Classify columns
+    numeric_cols = []
+    text_cols = []
     for col in columns:
+        vals = [row.get(col) for row in data_sample if isinstance(row.get(col), (int, float))]
+        if len(vals) > num_rows * 0.5:
+            numeric_cols.append(col)
+        else:
+            text_cols.append(col)
+
+    # Summary based on row/column count
+    summaries.append(f"Query returned {num_rows} row{'s' if num_rows != 1 else ''} across {num_cols} column{'s' if num_cols != 1 else ''}.")
+
+    # Analyze numeric columns
+    for col in numeric_cols:
         values = [row.get(col) for row in data_sample if isinstance(row.get(col), (int, float))]
-        if values:
-            avg_val = sum(values) / len(values)
-            max_val = max(values)
-            min_val = min(values)
-            summaries.append(f"Column '{col}': ranges from {min_val:,.2f} to {max_val:,.2f} (avg: {avg_val:,.2f}).")
-            if max_val > avg_val * 2:
-                summaries.append(f"The top value in '{col}' is significantly above average, indicating potential outliers.")
-            break
+        if not values:
+            continue
+        total = sum(values)
+        avg_val = total / len(values)
+        max_val = max(values)
+        min_val = min(values)
+        summaries.append(f"'{col}' ranges from {min_val:,.2f} to {max_val:,.2f} (average: {avg_val:,.2f}).")
 
-    if num_rows > 1:
-        summaries.append(f"The data shows {num_rows} distinct entries which can be analyzed for patterns.")
-    summaries.append("Review the visualization above for visual patterns and trends.")
+        if max_val > avg_val * 3:
+            summaries.append(f"Outlier detected: max value in '{col}' is {max_val/avg_val:.1f}x above average.")
+        if len(values) > 1:
+            sorted_vals = sorted(values, reverse=True)
+            top_pct = sorted_vals[0] / total * 100 if total > 0 else 0
+            if top_pct > 30:
+                summaries.append(f"Top entry accounts for {top_pct:.0f}% of total '{col}', indicating high concentration.")
+        break  # Only analyze first numeric column in summary
 
-    # Pad to 5
-    while len(summaries) < 5:
-        summaries.append("Consider drilling deeper into specific segments for more granular insights.")
+    # Analyze text columns for distribution
+    for col in text_cols:
+        val_counts = {}
+        for row in data_sample:
+            v = row.get(col)
+            if v is not None:
+                val_counts[str(v)] = val_counts.get(str(v), 0) + 1
+        if val_counts:
+            top_val = max(val_counts, key=val_counts.get)
+            top_count = val_counts[top_val]
+            unique_count = len(val_counts)
+            summaries.append(f"Top '{col}' is '{top_val}' ({top_count} occurrences) among {unique_count} unique values.")
+        break
 
-    recommendations = [
-        "Explore trends over different time periods to identify seasonality.",
-        "Compare these results with previous benchmarks to gauge performance.",
-        "Consider segmenting the data by additional dimensions for deeper analysis.",
-    ]
+    if not summaries:
+        summaries.append("The data contains structured records suitable for analysis.")
+    summaries.append("Review the chart above for visual patterns and trends.")
 
-    risks = [
-        "The dataset may contain incomplete records that could skew results.",
-        "Results should be cross-validated with other data sources for accuracy.",
-    ]
+    # Recommendations
+    if numeric_cols and text_cols:
+        recommendations.append(f"Analyze '{numeric_cols[0]}' by different '{text_cols[0]}' segments to find patterns.")
+    recommendations.append("Compare these results across different time periods to identify trends.")
+    recommendations.append("Segment by additional dimensions for deeper root-cause analysis.")
+    if numeric_cols:
+        recommendations.append(f"Investigate the drivers behind '{numeric_cols[0]}' variance across records.")
 
-    follow_ups = [
-        f"How does this change over time?",
-        f"What are the top and bottom performers?",
-        f"Can we see a breakdown by different categories?",
-    ]
+    # Risks
+    if num_rows < 10:
+        risks.append(f"Small sample size ({num_rows} rows) may not be statistically significant.")
+    else:
+        risks.append("Results are based on the queried subset — broader trends may differ.")
+    risks.append("Data quality issues (missing values, outliers) could affect accuracy.")
+
+    # Follow-ups
+    if text_cols:
+        follow_ups.append(f"What is the distribution of '{numeric_cols[0] if numeric_cols else 'values'}' by '{text_cols[0]}'?")
+    follow_ups.append("Show me the trend over time for this metric.")
+    if numeric_cols:
+        follow_ups.append(f"What are the top and bottom performers by '{numeric_cols[0]}'?")
 
     return {
         "executive_summary": summaries[:5],

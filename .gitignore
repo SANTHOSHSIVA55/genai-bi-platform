@@ -42,3 +42,5 @@ Thumbs.db
 .vercel/
 /frontend/.vercel/
 /backend/.vercel/
+
+.vercel
