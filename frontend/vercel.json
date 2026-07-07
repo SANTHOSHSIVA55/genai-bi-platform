@@ -1,3 +1,5 @@
 {
-  "outputDirectory": "build"
+  "outputDirectory": "build",
+  "buildCommand": "npx react-scripts build",
+  "framework": "create-react-app"
 }
