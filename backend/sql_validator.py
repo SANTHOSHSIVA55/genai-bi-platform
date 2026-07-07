@@ -99,7 +99,7 @@ def validate_sql_intent(question: str, sql: str, col_names: List[str]) -> dict:
             if group_col not in col_names_upper and group_col not in col_names:
                 issues.append(f"GROUP BY column '{group_col}' not found in dataset.")
 
-    # 3. Validate referenced columns exist
+    # 3. Validate referenced columns exist (skip table names in FROM/JOIN)
     sql_keywords = {
         "SELECT", "FROM", "WHERE", "GROUP", "ORDER", "BY", "AS", "ON",
         "AND", "OR", "IN", "NOT", "NULL", "IS", "LIKE", "BETWEEN",
@@ -107,7 +107,10 @@ def validate_sql_intent(question: str, sql: str, col_names: List[str]) -> dict:
         "DISTINCT", "COUNT", "SUM", "AVG", "MAX", "MIN", "ASC", "DESC",
         "CASE", "WHEN", "THEN", "ELSE", "END", "TRUE", "FALSE",
     }
-    col_refs = re.findall(r'"(\w+)"', sql)
+    # Remove table references after FROM/JOIN before extracting column refs
+    sql_no_tables = re.sub(r'\b(?:FROM|JOIN)\s+"(\w+)"', '', sql, flags=re.IGNORECASE)
+    sql_no_tables = re.sub(r'\b(?:FROM|JOIN)\s+(\w+)', '', sql_no_tables, flags=re.IGNORECASE)
+    col_refs = re.findall(r'"(\w+)"', sql_no_tables)
     for ref in col_refs:
         if ref.upper() in sql_keywords:
             continue

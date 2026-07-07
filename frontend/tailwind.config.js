@@ -29,13 +29,14 @@ module.exports = {
           800: '#2c2c2e',
           850: '#222223',
           900: '#1c1c1e',
-          950: '#0a0a0b',
+           950: '#0b0b0b',
         },
         apple: {
           red: '#ff3b30',
           orange: '#ff9500',
           yellow: '#ffcc00',
           green: '#34c759',
+          'green-bright': '#30d158',
           blue: '#007aff',
           teal: '#5ac8fa',
           purple: '#af52de',
@@ -52,9 +53,9 @@ module.exports = {
         '4xl': '80px',
       },
       borderRadius: {
-        'apple': '10px',
-        'apple-lg': '14px',
-        'apple-xl': '20px',
+        'apple': '20px',
+        'apple-lg': '22px',
+        'apple-xl': '24px',
       },
       boxShadow: {
         'apple': '0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 8px 40px 0 rgba(0, 0, 0, 0.4)',

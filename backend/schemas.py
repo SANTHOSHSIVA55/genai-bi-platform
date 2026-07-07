@@ -68,9 +68,16 @@ class ValidationInfo(BaseModel):
 
 class AIQuality(BaseModel):
     intent_detected: bool = True
+    sql_generated: bool = True
     sql_validated: bool = True
     chart_selected_correctly: bool = True
     summary_generated: bool = True
+    recommendations_generated: bool = True
+    follow_up_generated: bool = True
+    sql_executed_successfully: bool = True
+    visualization_quality: bool = True
+    overall_score: float = 100.0
+    step_scores: dict = {}
     issues: List[str] = []
 
 

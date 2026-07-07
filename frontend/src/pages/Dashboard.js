@@ -15,6 +15,17 @@ import AIQualityBadge from '../components/AIQualityBadge';
 import ErrorPanel from '../components/ErrorPanel';
 import toast from 'react-hot-toast';
 
+const detectIntentType = (question) => {
+  const q = (question || '').toLowerCase();
+  if (/compare|comparison|across/.test(q)) return 'comparison';
+  if (/top\s+\d|bottom\s+\d|rank(?:ed)?|best|worst|highest|lowest/.test(q)) return 'ranking';
+  if (/trend|over time|monthly|weekly|daily/.test(q)) return 'time_series';
+  if (/how many|total|number of|count/.test(q)) return 'count';
+  if (/correlation|relationship|vs|versus/.test(q)) return 'correlation';
+  if (/average|avg|sum|total|maximum|minimum/.test(q)) return 'aggregation';
+  return 'list';
+};
+
 const Dashboard = () => {
   const [datasets, setDatasets] = useState([]);
   const [queryHistory, setQueryHistory] = useState([]);
@@ -104,20 +115,65 @@ const Dashboard = () => {
           },
           ai_quality: {
             intent_detected: true,
+            sql_generated: true,
             sql_validated: true,
             chart_selected_correctly: true,
             summary_generated: true,
+            recommendations_generated: true,
+            follow_up_generated: true,
+            sql_executed_successfully: true,
+            visualization_quality: true,
+            overall_score: 100,
+            step_scores: {},
             issues: [],
           },
           validation_info: {
             valid: true,
             issues: [],
+            suggested_fix: null,
           },
         };
         setQueryResult(demoResult);
         toast.success('Demo results generated!');
       } else {
-        toast.error(err.response?.data?.detail || 'Query failed');
+        const detail = err.response?.data?.detail;
+        if (typeof detail === 'object' && detail?.error) {
+          // Structured error from backend
+          setQueryResult({
+            question: detail.question || queryData.question,
+            generated_sql: detail.generated_sql || '',
+            data: [],
+            chart_config: { chart_type: 'table', x_axis: '', y_axis: '', title: 'Error' },
+            summary: {
+              executive_summary: ['An error occurred while processing your query.'],
+              recommendations: [],
+              risks: [],
+              follow_up_questions: [],
+            },
+            ai_quality: {
+              intent_detected: true,
+              sql_generated: true,
+              sql_validated: false,
+              chart_selected_correctly: false,
+              summary_generated: false,
+              recommendations_generated: false,
+              follow_up_generated: false,
+              sql_executed_successfully: false,
+              visualization_quality: false,
+              overall_score: 37.5,
+              step_scores: {},
+              issues: [detail.error],
+            },
+            validation_info: {
+              valid: false,
+              issues: [detail.error],
+              suggested_fix: detail.suggested_fix || null,
+            },
+          });
+          toast.error(detail.error);
+        } else {
+          toast.error(detail || 'Query failed');
+        }
       }
     } finally {
       setLoading(false);
@@ -227,10 +283,15 @@ const Dashboard = () => {
                         handleQuery({ question: queryResult.question, dataset_id: datasets[0].id });
                       }
                     }}
+                    suggestedFix={queryResult.validation_info.suggested_fix}
                   />
                 )}
 
-                <ChartDisplay data={queryResult.data} chartConfig={queryResult.chart_config} />
+                <ChartDisplay
+                  data={queryResult.data}
+                  chartConfig={queryResult.chart_config}
+                  intentType={detectIntentType(queryResult.question)}
+                />
                 <SummaryPanel
                   summary={queryResult.summary}
                   generatedSql={queryResult.generated_sql}

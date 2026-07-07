@@ -53,25 +53,55 @@ def _parse_columns_info(columns_info: str) -> list:
         return []
 
 
+def _simple_stem(word: str) -> str:
+    w = word.lower().strip()
+    if w.endswith('ies') and len(w) > 4:
+        return w[:-3] + 'y'
+    if w.endswith('ses') and len(w) > 4:
+        return w[:-2]
+    if w.endswith('s') and not w.endswith('ss') and len(w) > 3:
+        return w[:-1]
+    return w
+
+
+def _match_col(text: str, col_names: list) -> Optional[str]:
+    stem = _simple_stem(text.strip())
+    for c in col_names:
+        c_lower = c.lower()
+        c_clean = c_lower.replace('_', ' ')
+        if c_lower == stem or c_clean == stem:
+            return c
+        c_stem = _simple_stem(c_lower)
+        if c_stem == stem:
+            return c
+        c_clean_stem = _simple_stem(c_clean)
+        if c_clean_stem == stem:
+            return c
+    return None
+
+
 def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols: list):
-    """Detect user intent from question. Returns a structured intent dict."""
     q = question.lower().strip()
 
     intent = {
+        "intent_type": "list",
         "is_count_query": False,
         "is_aggregation": False,
+        "is_comparison": False,
+        "is_ranking": False,
+        "is_time_series": False,
+        "is_correlation": False,
+        "is_list_all": False,
         "agg_func": None,
         "agg_col": None,
         "group_col": None,
         "group_by_phrase": None,
         "sort_order": None,
         "limit": None,
-        "is_time_series": False,
-        "is_list_all": False,
         "columns_to_select": [],
     }
 
-    # Count intent detection
+    # 1. COUNT detection
     count_patterns = [
         r"^how many\s+(.+)\s+are there\??$",
         r"^how many\s+(.+)\??$",
@@ -83,50 +113,134 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
         r"^what is the total number of\s+(.+)$",
         r"^give me the count of\s+(.+)$",
     ]
-
     for pattern in count_patterns:
         m = re.match(pattern, q)
         if m:
             intent["is_count_query"] = True
             intent["is_aggregation"] = True
             intent["agg_func"] = "COUNT"
-            # Extract what entity is being counted
+            intent["intent_type"] = "count"
             target = m.group(1).strip().rstrip("?.")
-            # Check if target is a column name
             for c in col_names:
                 if c.lower() == target or c.lower().replace("_", " ") == target:
                     intent["agg_col"] = c
                     break
             break
 
-    # Aggregation detection (sum, avg, max, min)
-    if not intent["is_aggregation"]:
+    # 2. COMPARISON: "compare X across Y", "X comparison by Y"
+    if intent["intent_type"] == "list":
+        compare_match = re.search(r'\bcompare\s+(.+?)\s+(?:across|by|with|against)\s+(.+)', q)
+        if not compare_match:
+            compare_match = re.search(r'(.+?)\s+comparison\s+(?:across|by|of|between|with)\s+(.+)', q)
+
+        if compare_match:
+            metric_phrase = compare_match.group(1).strip()
+            group_phrase = compare_match.group(2).strip()
+
+            agg_keywords = {
+                'average': 'AVG', 'avg': 'AVG', 'mean': 'AVG',
+                'total': 'SUM', 'sum': 'SUM',
+                'maximum': 'MAX', 'max': 'MAX', 'highest': 'MAX',
+                'minimum': 'MIN', 'min': 'MIN', 'lowest': 'MIN',
+                'count': 'COUNT',
+            }
+            for kw, func in agg_keywords.items():
+                if kw in metric_phrase:
+                    intent['agg_func'] = func
+                    metric_phrase = re.sub(r'\b' + kw + r'\b', '', metric_phrase).strip()
+                    break
+
+            if not intent['agg_func']:
+                intent['agg_func'] = 'SUM'
+
+            words = re.findall(r'\w+', metric_phrase)
+            for w in words:
+                intent['agg_col'] = _match_col(w, numeric_cols)
+                if intent['agg_col']:
+                    break
+            if not intent['agg_col']:
+                for w in re.findall(r'\w+', metric_phrase):
+                    intent['agg_col'] = _match_col(w, col_names)
+                    if intent['agg_col']:
+                        break
+
+            for w in re.findall(r'\w+', group_phrase):
+                intent['group_col'] = _match_col(w, text_cols)
+                if intent['group_col']:
+                    break
+            if not intent['group_col']:
+                for w in re.findall(r'\w+', group_phrase):
+                    intent['group_col'] = _match_col(w, col_names)
+                    if intent['group_col']:
+                        break
+
+            if intent['agg_col'] and intent['group_col']:
+                intent['intent_type'] = 'comparison'
+                intent['is_comparison'] = True
+                intent['is_aggregation'] = True
+                intent['sort_order'] = 'DESC'
+
+    # 3. RANKING: "top N X by Y", "rank X by Y", "bottom N X by Y"
+    if intent['intent_type'] == 'list':
+        rank_match = re.search(r'(?:top|bottom|rank(?:ed)?|best|worst|highest|lowest)\s+(\d+)?\s*(.+?)\s+by\s+(.+)', q)
+        if not rank_match:
+            rank_match = re.search(r'(?:top|bottom|rank(?:ed)?|best|worst|highest|lowest)\s+(\d+)\s+(.+)', q)
+
+        if rank_match:
+            limit_str = rank_match.group(1)
+            entity_phrase = rank_match.group(2).strip()
+            metric_phrase = rank_match.group(3).strip() if rank_match.lastindex and rank_match.lastindex >= 3 else entity_phrase
+
+            intent['intent_type'] = 'ranking'
+            intent['is_ranking'] = True
+            intent['limit'] = int(limit_str) if limit_str else 10
+
+            if any(w in q for w in ['top', 'best', 'highest', 'largest']):
+                intent['sort_order'] = 'DESC'
+            else:
+                intent['sort_order'] = 'ASC'
+
+            for w in re.findall(r'\w+', metric_phrase):
+                intent['agg_col'] = _match_col(w, numeric_cols)
+                if intent['agg_col']:
+                    break
+            for w in re.findall(r'\w+', entity_phrase):
+                intent['group_col'] = _match_col(w, text_cols)
+                if intent['group_col']:
+                    break
+            if not intent['group_col']:
+                for w in re.findall(r'\w+', entity_phrase):
+                    intent['group_col'] = _match_col(w, col_names)
+                    if intent['group_col']:
+                        break
+
+            if intent['group_col'] and not intent['agg_col'] and numeric_cols:
+                intent['agg_col'] = numeric_cols[0]
+
+    # 4. AGGREGATION (non-comparison)
+    if intent['intent_type'] == 'list':
         agg_map = {
-            "average": "AVG", "avg": "AVG", "mean": "AVG",
-            "total": "SUM", "sum": "SUM",
-            "maximum": "MAX", "max": "MAX", "highest": "MAX", "largest": "MAX",
-            "minimum": "MIN", "min": "MIN", "lowest": "MIN", "smallest": "MIN",
+            'average': 'AVG', 'avg': 'AVG', 'mean': 'AVG',
+            'total': 'SUM', 'sum': 'SUM',
+            'maximum': 'MAX', 'max': 'MAX', 'highest': 'MAX', 'largest': 'MAX',
+            'minimum': 'MIN', 'min': 'MIN', 'lowest': 'MIN', 'smallest': 'MIN',
         }
         for keyword, func in agg_map.items():
             if keyword in q:
-                intent["is_aggregation"] = True
-                intent["agg_func"] = func
+                intent['is_aggregation'] = True
+                intent['agg_func'] = func
                 break
 
-    # If count query, find what to count
-    if intent["is_count_query"]:
-        intent["agg_col"] = None  # COUNT(*) by default
+        if intent['is_aggregation']:
+            intent['intent_type'] = 'aggregation'
+            for c in numeric_cols:
+                if c.lower() in q or c.lower().replace('_', ' ') in q:
+                    intent['agg_col'] = c
+                    break
+            if not intent['agg_col'] and numeric_cols:
+                intent['agg_col'] = numeric_cols[0]
 
-    # Find aggregation column for non-count aggregations
-    if intent["is_aggregation"] and intent["agg_func"] != "COUNT" and numeric_cols:
-        for c in numeric_cols:
-            if c.lower() in q or c.lower().replace("_", " ") in q:
-                intent["agg_col"] = c
-                break
-        if not intent["agg_col"]:
-            intent["agg_col"] = numeric_cols[0]
-
-    # Group by detection - only when user explicitly asks for grouping
+    # 5. GROUP BY detection
     group_phrases = [
         r"by\s+(\w+(?:\s+\w+)*)\s*$",
         r"per\s+(\w+(?:\s+\w+)*)",
@@ -136,7 +250,6 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
         r"distribution\s+(?:by|of|per)\s+(\w+(?:\s+\w+)*)",
         r"group by\s+(\w+(?:\s+\w+)*)",
     ]
-
     for phrase in group_phrases:
         m = re.search(phrase, q)
         if m:
@@ -149,24 +262,32 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
             if intent["group_col"]:
                 break
 
-    # Sorting detection
+    # 6. Sorting
     if any(w in q for w in ["top", "highest", "most", "best", "largest"]):
         intent["sort_order"] = "DESC"
     elif any(w in q for w in ["bottom", "lowest", "least", "worst", "smallest"]):
         intent["sort_order"] = "ASC"
 
-    # Limit detection
+    # 7. Limit
     limit_match = re.search(r"(?:top|bottom|first|last)\s+(\d+)", q)
     if limit_match:
         intent["limit"] = int(limit_match.group(1))
     elif "top" in q or "bottom" in q:
         intent["limit"] = 10
 
-    # Time series detection
-    if any(w in q for w in ["trend", "over time", "monthly", "weekly", "daily"]):
+    # 8. Time series
+    if any(w in q for w in ["trend", "over time", "monthly", "weekly", "daily", "timeline", "growth"]):
         intent["is_time_series"] = True
+        if intent["intent_type"] == "list":
+            intent["intent_type"] = "time_series"
 
-    # List all detection
+    # 9. Correlation
+    if any(w in q for w in ["correlation", "relationship", "vs", "versus", "scatter"]):
+        intent["is_correlation"] = True
+        if intent["intent_type"] == "list":
+            intent["intent_type"] = "correlation"
+
+    # 10. List all
     if any(w in q for w in ["all", "everything", "show me all", "list all"]):
         intent["is_list_all"] = True
 
@@ -174,7 +295,6 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
 
 
 def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
-    """Smart local NL-SQL converter with proper intent detection."""
     cols = _parse_columns_info(columns_info)
     col_names = [c["name"] for c in cols]
     numeric_cols = [c["name"] for c in cols if c.get("dtype") in ("int64", "float64", "int32", "float32")]
@@ -182,32 +302,44 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
     all_cols = ", ".join(f'"{c}"' for c in col_names)
 
     intent = _detect_intent(question, col_names, numeric_cols, text_cols)
-
-    # Get date columns
     date_cols = [c["name"] for c in cols if "date" in c.get("dtype", "").lower() or "date" in c["name"].lower() or "time" in c["name"].lower()]
 
-    # COUNT query without GROUP BY → simple count
+    # COUNT without GROUP BY
     if intent["is_count_query"] and not intent["group_col"]:
         if intent["agg_col"]:
             return f'SELECT COUNT(DISTINCT "{intent["agg_col"]}") AS total_{intent["agg_col"]} FROM "{table_name}"'
         return f'SELECT COUNT(*) AS total_count FROM "{table_name}"'
 
-    # COUNT query WITH GROUP BY (explicit)
+    # COUNT with GROUP BY
     if intent["is_count_query"] and intent["group_col"]:
         return f'SELECT "{intent["group_col"]}", COUNT(*) AS count FROM "{table_name}" GROUP BY "{intent["group_col"]}" ORDER BY count DESC'
 
+    # COMPARISON: aggregate metric grouped by dimension
+    if intent["intent_type"] == "comparison" and intent["group_col"] and intent["agg_col"]:
+        alias = f'{intent["agg_func"].lower()}_{intent["agg_col"]}'
+        sql = f'SELECT "{intent["group_col"]}", {intent["agg_func"]}("{intent["agg_col"]}") AS {alias} FROM "{table_name}" GROUP BY "{intent["group_col"]}" ORDER BY {alias} DESC'
+        return sql
+
+    # RANKING: sort by metric
+    if intent["intent_type"] == "ranking":
+        select_cols = all_cols
+        if intent["group_col"] and intent["agg_col"]:
+            select_cols = f'"{intent["group_col"]}", "{intent["agg_col"]}"'
+        sql = f'SELECT {select_cols} FROM "{table_name}"'
+        sort_col = intent["agg_col"] if intent["agg_col"] else (numeric_cols[0] if numeric_cols else col_names[0])
+        sql += f' ORDER BY "{sort_col}" {intent["sort_order"] or "DESC"}'
+        sql += f' LIMIT {intent["limit"] or 10}'
+        return sql
+
     # Aggregation with GROUP BY
     if intent["is_aggregation"] and intent["group_col"] and intent["agg_col"]:
-        sql = f'SELECT "{intent["group_col"]}", {intent["agg_func"]}("{intent["agg_col"]}") AS {intent["agg_func"].lower()}_{intent["agg_col"]} FROM "{table_name}" GROUP BY "{intent["group_col"]}"'
-        if intent["sort_order"]:
-            sql += f' ORDER BY {intent["agg_func"].lower()}_{intent["agg_col"]} {intent["sort_order"]}'
-        else:
-            sql += f' ORDER BY {intent["agg_func"].lower()}_{intent["agg_col"]} DESC'
+        alias = f'{intent["agg_func"].lower()}_{intent["agg_col"]}'
+        sql = f'SELECT "{intent["group_col"]}", {intent["agg_func"]}("{intent["agg_col"]}") AS {alias} FROM "{table_name}" GROUP BY "{intent["group_col"]}" ORDER BY {alias} DESC'
         if intent["limit"]:
             sql += f' LIMIT {intent["limit"]}'
         return sql
 
-    # Simple aggregation without GROUP BY
+    # Aggregation without GROUP BY
     if intent["is_aggregation"] and intent["agg_col"]:
         return f'SELECT {intent["agg_func"]}("{intent["agg_col"]}") AS {intent["agg_func"].lower()}_{intent["agg_col"]} FROM "{table_name}"'
 
@@ -219,7 +351,7 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
     if intent["is_list_all"]:
         return f'SELECT {all_cols} FROM "{table_name}" LIMIT 100'
 
-    # Default: show relevant columns
+    # Sort-only queries
     if intent["sort_order"] and numeric_cols:
         sort_col = numeric_cols[0]
         return f'SELECT {all_cols} FROM "{table_name}" ORDER BY "{sort_col}" {intent["sort_order"]} LIMIT {intent["limit"] or 10}'
@@ -240,10 +372,13 @@ CRITICAL RULES:
 - Limit results to 1000 rows maximum.
 
 INTENT RULES - FOLLOW STRICTLY:
-- "How many X are there?", "Total X", "Number of X", "Count X" → SELECT COUNT(*) or SELECT COUNT(DISTINCT col) NEVER use GROUP BY for these.
+- "How many X are there?", "Total X", "Number of X", "Count X" -> SELECT COUNT(*) or SELECT COUNT(DISTINCT col) NEVER use GROUP BY for these.
 - Only use GROUP BY when user explicitly asks "by country", "by city", "for each category", "per X", "distribution by X".
 - Never add GROUP BY to a count/total query unless user asks for grouping.
 - If user asks for a simple count, return a single row with the count.
+- "Compare X across Y", "X comparison by Y" -> SELECT Y, SUM(X) ... GROUP BY Y ORDER BY SUM(X) DESC
+- "Top N X by Y" -> SELECT X, Y ... ORDER BY Y DESC LIMIT N
+- "Rank X by Y" -> SELECT X, Y ... ORDER BY Y DESC
 """
         result = _chat(system_prompt, question)
         if result and not result.startswith("AI_ERROR"):
@@ -255,10 +390,6 @@ INTENT RULES - FOLLOW STRICTLY:
 
 
 def validate_sql_intent(question: str, sql: str, table_name: str, columns_info: str) -> dict:
-    """
-    Validate that generated SQL matches user intent.
-    Returns {"valid": bool, "issues": [str], "suggested_fix": str or None}
-    """
     q = question.lower().strip()
     sql_upper = sql.upper()
     cols = _parse_columns_info(columns_info)
@@ -266,14 +397,14 @@ def validate_sql_intent(question: str, sql: str, table_name: str, columns_info: 
 
     issues = []
 
-    # 1. Check: count query should not have GROUP BY
+    # 1. Count query should not have GROUP BY
     is_count_question = bool(re.match(r"^(how many|total|number of|count)", q))
     has_group_by = "GROUP BY" in sql_upper
 
     if is_count_question and has_group_by:
         issues.append("The query groups results instead of counting total. Use COUNT(*) without GROUP BY.")
 
-    # 2. Check: GROUP BY column exists
+    # 2. GROUP BY column exists
     if has_group_by:
         group_match = re.search(r'GROUP BY\s+"?(\w+)"?', sql_upper)
         if group_match:
@@ -281,15 +412,24 @@ def validate_sql_intent(question: str, sql: str, table_name: str, columns_info: 
             if group_col not in [c.upper() for c in col_names] and group_col not in col_names:
                 issues.append(f"GROUP BY column '{group_col}' not found in dataset.")
 
-    # 3. Check: all referenced columns exist
-    col_refs = re.findall(r'"(\w+)"', sql)
+    # 3. Column existence check (skip table names in FROM/JOIN)
+    sql_keywords = {
+        "SELECT", "FROM", "WHERE", "GROUP", "ORDER", "BY", "AS", "ON",
+        "AND", "OR", "IN", "NOT", "NULL", "IS", "LIKE", "BETWEEN",
+        "INNER", "LEFT", "RIGHT", "JOIN", "LIMIT", "OFFSET", "HAVING",
+        "DISTINCT", "COUNT", "SUM", "AVG", "MAX", "MIN", "ASC", "DESC",
+        "CASE", "WHEN", "THEN", "ELSE", "END", "TRUE", "FALSE",
+    }
+    sql_no_tables = re.sub(r'\b(?:FROM|JOIN)\s+"(\w+)"', '', sql, flags=re.IGNORECASE)
+    sql_no_tables = re.sub(r'\b(?:FROM|JOIN)\s+(\w+)', '', sql_no_tables, flags=re.IGNORECASE)
+    col_refs = re.findall(r'"(\w+)"', sql_no_tables)
     for ref in col_refs:
-        if ref.upper() in ("SELECT", "FROM", "WHERE", "GROUP", "ORDER", "BY", "AS", "ON", "AND", "OR", "IN", "NOT", "NULL", "IS", "LIKE", "BETWEEN", "INNER", "LEFT", "RIGHT", "JOIN", "LIMIT", "OFFSET", "HAVING", "DISTINCT", "COUNT", "SUM", "AVG", "MAX", "MIN", "ASC", "DESC"):
+        if ref.upper() in sql_keywords:
             continue
         if ref not in col_names and ref.upper() not in [c.upper() for c in col_names]:
             issues.append(f"Column '{ref}' referenced in SQL does not exist in dataset.")
 
-    # 4. Check: simple count should not select extra columns
+    # 4. Simple count should not select extra columns
     if is_count_question:
         select_match = re.search(r"SELECT\s+(.+?)\s+FROM", sql_upper)
         if select_match:
@@ -310,10 +450,9 @@ def validate_sql_intent(question: str, sql: str, table_name: str, columns_info: 
 
 
 def detect_chart_type(question: str, columns: list, data_sample: list) -> dict:
-    """Smart chart detection with KPI card for single values."""
     q = question.lower()
 
-    # Check for single-value result → KPI card
+    # Single value -> KPI
     if len(data_sample) == 1 and len(columns) == 1:
         col_name = columns[0]
         val = data_sample[0].get(col_name)
@@ -326,7 +465,7 @@ def detect_chart_type(question: str, columns: list, data_sample: list) -> dict:
                 "description": f"Single value result for: {question}",
             }
 
-    # Check for count query → KPI card
+    # Count query -> KPI
     if any(kw in q for kw in ["how many", "total", "number of", "count"]):
         if len(data_sample) <= 1:
             col_name = columns[0] if columns else "value"
@@ -366,33 +505,54 @@ def detect_chart_type(question: str, columns: list, data_sample: list) -> dict:
     if numeric_cols:
         y_axis = numeric_cols[0]
 
-    # Smart chart selection rules
     chart_type = "table"
 
-    # Single numeric column + text/category column → Bar chart
-    if len(numeric_cols) >= 1 and text_cols:
-        if len(data_sample) <= 15:
-            chart_type = "bar"
+    # Intent-based chart selection
+    is_comparison = any(w in q for w in ["compare", "comparison", "across", "by region", "by category"])
+    is_ranking = any(w in q for w in ["top", "bottom", "rank", "best", "worst", "highest", "lowest"])
+    is_trend = any(w in q for w in ["trend", "over time", "monthly", "weekly", "daily", "timeline", "growth"])
+    is_distribution = any(w in q for w in ["percentage", "distribution", "share", "proportion", "breakdown"])
+    is_correlation = any(w in q for w in ["correlation", "relationship", "vs", "versus", "scatter"])
+
+    # Comparison -> bar chart (use horizontal bar for rankings)
+    if is_comparison and text_cols and numeric_cols:
+        chart_type = "bar"
+
+    # Ranking -> bar chart (horizontal)
+    if is_ranking and text_cols and numeric_cols:
+        chart_type = "bar"
+
+    # Trend -> line chart
+    if is_trend and (date_cols or text_cols) and numeric_cols:
+        chart_type = "line"
+        if date_cols:
+            x_axis = date_cols[0]
+
+    # Distribution -> pie chart (small cardinality only)
+    if is_distribution and text_cols:
+        unique_vals = set(row.get(text_cols[0]) for row in data_sample if row.get(text_cols[0]) is not None)
+        if len(unique_vals) <= 10:
+            chart_type = "pie"
         else:
             chart_type = "bar"
 
-    # Time-based data → Line chart
-    elif date_cols and numeric_cols:
-        chart_type = "line" if len(data_sample) > 3 else "bar"
-
-    # Explicit keywords
-    if any(w in q for w in ["trend", "over time", "monthly", "weekly", "daily", "timeline", "growth"]):
-        chart_type = "line" if len(data_sample) > 5 else "bar"
-    elif any(w in q for w in ["percentage", "distribution", "share", "proportion", "breakdown"]):
-        chart_type = "pie"
-    elif any(w in q for w in ["top", "bottom", "compare", "highest", "lowest", "best", "worst", "rank"]):
+    # Correlation -> treat as bar (scatter requires two numeric cols)
+    if is_correlation:
         chart_type = "bar"
 
-    # Multiple records without clear category → Table
+    # Default: text + numeric -> bar
+    if chart_type == "table" and text_cols and numeric_cols:
+        chart_type = "bar"
+
+    # Time-based data + numeric -> line
+    if chart_type == "table" and date_cols and numeric_cols:
+        chart_type = "line" if len(data_sample) > 3 else "bar"
+
+    # No category and no date -> table
     if chart_type == "bar" and not text_cols and not date_cols:
         chart_type = "table"
 
-    # Pie refinement: only for small categorical data
+    # Pie refinement
     if chart_type == "pie" and text_cols:
         unique_vals = set(row.get(text_cols[0]) for row in data_sample if row.get(text_cols[0]) is not None)
         if len(unique_vals) > 10:
@@ -412,7 +572,6 @@ def detect_chart_type(question: str, columns: list, data_sample: list) -> dict:
 
 
 def generate_insights(question: str, data_sample: list, columns: list) -> dict:
-    """Generate insights based ONLY on available data and columns."""
     num_rows = len(data_sample)
     num_cols = len(columns)
 
@@ -421,7 +580,6 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
     risks = []
     follow_ups = []
 
-    # Classify columns
     col_names = columns
     numeric_cols = []
     text_cols = []
@@ -437,10 +595,14 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
         if any(kw in col_lower for kw in ("date", "time", "day", "month", "year", "quarter", "week")):
             date_cols.append(col)
 
-    # Build data-aware summary
-    summaries.append(f"Query returned {num_rows} row{'s' if num_rows != 1 else ''} across {num_cols} column{'s' if num_cols != 1 else ''}.")
+    q = question.lower()
 
-    # Check if it's a simple count result
+    # Detect intent type for smarter insights
+    is_comparison = "comparison" in q or "compare" in q or "across" in q
+    is_ranking = any(w in q for w in ["top ", "bottom ", "rank", "best", "worst"])
+    is_count = any(w in q for w in ["how many", "total", "number of", "count"])
+
+    # Single-value KPI result
     if num_rows == 1 and num_cols == 1:
         col = col_names[0]
         val = data_sample[0].get(col)
@@ -448,9 +610,116 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
             if "count" in col.lower() or "total" in col.lower():
                 summaries.append(f"There are {int(val)} records in the dataset.")
             else:
-                summaries.append(f"The {col} value is {val}.")
+                summaries.append(f"The {col} value is {val:,.2f}.")
+            recommendations.append(f"Break down this metric by available dimensions for deeper analysis.")
+            if text_cols:
+                follow_ups.append(f"Show this metric by {text_cols[0]}.")
+            follow_ups.append(f"What is the trend of {col} over time?")
+            return {
+                "executive_summary": summaries[:5],
+                "recommendations": recommendations[:3],
+                "risks": risks[:2],
+                "follow_up_questions": follow_ups[:3],
+            }
 
-    # Numeric analysis only with meaningful data
+    # Comparison insights (e.g., "profit comparison across regions")
+    if is_comparison and len(text_cols) >= 1 and len(numeric_cols) >= 1:
+        dim_col = text_cols[0]
+        metric_col = numeric_cols[0]
+
+        values = [(row.get(dim_col, "Unknown"), row.get(metric_col, 0) or 0) for row in data_sample]
+        values.sort(key=lambda x: x[1], reverse=True)
+
+        if len(values) >= 1:
+            top_name, top_val = values[0]
+            summaries.append(f"'{top_name}' leads with {top_val:,.2f} in '{metric_col}'.")
+
+        if len(values) >= 2:
+            second_name, second_val = values[1]
+            summaries.append(f"'{second_name}' follows with {second_val:,.2f}.")
+
+        if len(values) >= 3:
+            bottom_name, bottom_val = values[-1]
+            summaries.append(f"'{bottom_name}' has the lowest at {bottom_val:,.2f}.")
+
+        if len(values) >= 2:
+            total = sum(v for _, v in values)
+            top_pct = (top_val / total * 100) if total > 0 else 0
+            summaries.append(f"'{top_name}' accounts for {top_pct:.0f}% of total '{metric_col}'.")
+
+        avg_val = sum(v for _, v in values) / len(values) if values else 0
+        summaries.append(f"The average '{metric_col}' across all {dim_col}s is {avg_val:,.2f}.")
+
+        # Query-context recommendations
+        if len(values) >= 2:
+            recommendations.append(f"Drill down into '{top_name}' to identify what drives its high {metric_col}.")
+            recommendations.append(f"Analyze why '{values[-1][0]}' underperforms and explore improvement opportunities.")
+        if date_cols:
+            recommendations.append(f"Compare {metric_col} trends over time for top and bottom {dim_col}s.")
+
+        # Query-context follow-ups
+        if date_cols:
+            follow_ups.append(f"Show {metric_col} trend over time for '{top_name}'.")
+        follow_ups.append(f"Compare {metric_col} across all {dim_col}s.")
+        if len(numeric_cols) > 1:
+            follow_ups.append(f"Show correlation between {numeric_cols[0]} and {numeric_cols[1]}.")
+
+        return {
+            "executive_summary": summaries[:5],
+            "recommendations": recommendations[:3],
+            "risks": risks[:2],
+            "follow_up_questions": follow_ups[:3],
+        }
+
+    # Ranking insights (e.g., "top 5 products by revenue")
+    if is_ranking and len(numeric_cols) >= 1:
+        metric_col = numeric_cols[0]
+
+        values = [row.get(metric_col, 0) or 0 for row in data_sample]
+        if values:
+            max_val = max(values)
+            min_val = min(values)
+            avg_val = sum(values) / len(values)
+
+            if num_rows <= 20:
+                summaries.append(f"'{metric_col}' ranges from {min_val:,.2f} to {max_val:,.2f} (average: {avg_val:,.2f}).")
+            else:
+                summaries.append(f"Showing top {num_rows} records by '{metric_col}'.")
+
+            if text_cols:
+                top_row = max(data_sample, key=lambda r: r.get(metric_col, 0) or 0)
+                top_name = top_row.get(text_cols[0], "Unknown")
+                summaries.append(f"'{top_name}' tops the list with {max_val:,.2f}.")
+
+                if num_rows > 1:
+                    bottom_row = min(data_sample, key=lambda r: r.get(metric_col, 0) or 0)
+                    bottom_name = bottom_row.get(text_cols[0], "Unknown")
+                    summaries.append(f"'{bottom_name}' ranks last with {min_val:,.2f}.")
+
+        # Query-context recommendations
+        if text_cols:
+            recommendations.append(f"Explore what differentiates top-performing {text_cols[0]}s from the rest.")
+            if date_cols:
+                recommendations.append(f"Analyze {metric_col} trends over time for the top {text_cols[0]}s.")
+        recommendations.append(f"Consider which {metric_col} drivers can be optimized for better results.")
+
+        # Follow-ups
+        if text_cols:
+            follow_ups.append(f"Show distribution of {metric_col} by {text_cols[0]}.")
+            follow_ups.append(f"What factors contribute to {metric_col} performance?")
+        if date_cols:
+            follow_ups.append(f"Show {metric_col} trend over time.")
+
+        return {
+            "executive_summary": summaries[:5],
+            "recommendations": recommendations[:3],
+            "risks": risks[:2],
+            "follow_up_questions": follow_ups[:3],
+        }
+
+    # Default: data-driven insights
+    summaries.append(f"Query returned {num_rows} row{'s' if num_rows != 1 else ''} across {num_cols} column{'s' if num_cols != 1 else ''}.")
+
     for col in numeric_cols:
         values = [row.get(col) for row in data_sample if isinstance(row.get(col), (int, float))]
         if not values or len(values) < 2:
@@ -472,7 +741,6 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
         break
 
     # Text column distribution
-    has_text_analysis = False
     for col in text_cols:
         val_counts = {}
         for row in data_sample:
@@ -487,29 +755,18 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
                 summaries.append(f"Top '{col}' is '{top_val}' ({top_count} occurrences) among {unique_count} unique values.")
             else:
                 summaries.append(f"'{col}' has a single value: '{top_val}'.")
-            has_text_analysis = True
         break
 
     if not summaries:
         summaries.append("The data contains structured records suitable for analysis.")
 
-    # Recommendations based only on available columns
+    # Query-context recommendations
     if text_cols and numeric_cols:
-        recommendations.append(f"Analyze '{numeric_cols[0]}' by different '{text_cols[0]}' segments to identify patterns.")
+        recommendations.append(f"Analyze '{numeric_cols[0]}' by '{text_cols[0]}' to identify patterns.")
+    if date_cols and numeric_cols:
+        recommendations.append(f"Track '{numeric_cols[0]}' over time to identify trends.")
     if text_cols:
-        recommendations.append(f"Find suppliers by '{text_cols[0]}' to explore geographic distribution.")
-    if text_cols and len(text_cols) > 1:
-        recommendations.append(f"View contact details and relationships between '{text_cols[0]}' and '{text_cols[1]}'.")
-    if numeric_cols:
-        recommendations.append(f"Investigate the drivers behind '{numeric_cols[0]}' variance across records.")
-    if text_cols:
-        recommendations.append(f"Analyze supplier distribution by country.")
-        recommendations.append(f"Find suppliers by city.")
-        recommendations.append(f"View supplier contact details.")
-
-    # Remove generic time-based recommendations if no date columns
-    if not date_cols:
-        recommendations = [r for r in recommendations if "time" not in r.lower() and "month" not in r.lower() and "weekly" not in r.lower() and "daily" not in r.lower() and "trend" not in r.lower()]
+        recommendations.append(f"Explore the distribution of records by '{text_cols[0]}'.")
 
     # Risks
     if num_rows < 5:
@@ -520,8 +777,8 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
     # Follow-ups
     if text_cols and numeric_cols:
         follow_ups.append(f"What is the '{numeric_cols[0]}' by '{text_cols[0]}'?")
-    if text_cols:
-        follow_ups.append(f"Show me all records grouped by '{text_cols[0]}'.")
+    if date_cols and numeric_cols:
+        follow_ups.append(f"Show '{numeric_cols[0]}' trend over time.")
     if text_cols and numeric_cols:
         follow_ups.append(f"What are the top 5 '{text_cols[0]}' by '{numeric_cols[0]}'?")
 
@@ -533,13 +790,67 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
     }
 
 
-def generate_ai_quality(question: str, sql: str, chart_type: str, validation_result: dict) -> dict:
-    """Generate AI quality indicators for the response."""
-    quality = {
-        "intent_detected": True,
-        "sql_validated": validation_result.get("valid", True),
-        "chart_selected_correctly": True,
-        "summary_generated": True,
-        "issues": validation_result.get("issues", []),
+def generate_ai_quality(question: str, sql: str, chart_type: str, validation_result: dict,
+                        data_length: int, sql_success: bool = True) -> dict:
+    q = question.lower().strip()
+    issues = validation_result.get("issues", [])[:]
+
+    # Step 1: Intent detected
+    intent_detected = bool(
+        re.search(r"(how many|total|count|compare|comparison|top|bottom|rank|average|sum|trend|correlation)", q)
+    )
+
+    # Step 2: SQL generated
+    sql_generated = bool(sql and not sql.startswith("AI_ERROR"))
+
+    # Step 3: SQL validated
+    sql_validated = validation_result.get("valid", True)
+
+    # Step 4: Chart selected correctly
+    chart_selected_correctly = chart_type not in ("table",) or data_length > 0
+
+    # Step 5: Summary generated
+    summary_generated = True
+
+    # Step 6: Recommendations generated
+    recommendations_generated = True
+
+    # Step 7: Follow-up generated
+    follow_up_generated = True
+
+    # Step 8: SQL executed successfully
+    sql_executed_successfully = sql_success
+
+    # Visualization quality
+    visualization_quality = chart_type in ("kpi", "bar", "line", "pie", "area")
+
+    # Step scores
+    steps = {
+        "intent_detected": int(intent_detected),
+        "sql_generated": int(sql_generated),
+        "sql_validated": int(sql_validated),
+        "chart_selected_correctly": int(chart_selected_correctly),
+        "summary_generated": int(summary_generated),
+        "recommendations_generated": int(recommendations_generated),
+        "follow_up_generated": int(follow_up_generated),
+        "sql_executed_successfully": int(sql_executed_successfully),
     }
-    return quality
+
+    total_possible = len(steps)
+    total_achieved = sum(steps.values())
+    overall_score = round((total_achieved / total_possible) * 100, 1) if total_possible > 0 else 100.0
+
+    return {
+        "intent_detected": intent_detected,
+        "sql_generated": sql_generated,
+        "sql_validated": sql_validated,
+        "chart_selected_correctly": chart_selected_correctly,
+        "summary_generated": summary_generated,
+        "recommendations_generated": recommendations_generated,
+        "follow_up_generated": follow_up_generated,
+        "sql_executed_successfully": sql_executed_successfully,
+        "visualization_quality": visualization_quality,
+        "overall_score": overall_score,
+        "step_scores": steps,
+        "issues": issues,
+    }

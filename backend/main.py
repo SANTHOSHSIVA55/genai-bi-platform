@@ -24,7 +24,7 @@ from auth import (
 )
 from data_cleaner import read_uploaded_file, clean_dataframe, get_column_info
 from sql_validator import validate_sql, validate_sql_intent, sanitize_column_name
-from ai_engine import nl_to_sql, detect_chart_type, generate_insights, generate_ai_quality
+from ai_engine import nl_to_sql, _local_nl_to_sql, detect_chart_type, generate_insights, generate_ai_quality
 
 load_dotenv()
 
@@ -330,18 +330,16 @@ def execute_nl_query(
         raise HTTPException(status_code=500, detail=generated_sql)
 
     # Validate SQL intent - check if SQL matches user intent
-    validation_result = validate_sql_intent(body.question, generated_sql, col_names)
+    validation_result = validate_sql_intent(body.question, generated_sql, dataset.table_name, columns_info)
 
     # Auto-regenerate if validation fails
     if not validation_result["valid"]:
         regenerated_sql = nl_to_sql(body.question, dataset.table_name, columns_info)
-        # Re-validate regenerated SQL
-        revalidation = validate_sql_intent(body.question, regenerated_sql, col_names)
+        revalidation = validate_sql_intent(body.question, regenerated_sql, dataset.table_name, columns_info)
         if revalidation["valid"]:
             generated_sql = regenerated_sql
             validation_result = revalidation
         else:
-            # If still invalid, use it anyway but mark issues
             generated_sql = regenerated_sql
             validation_result["issues"].extend(revalidation["issues"])
 
@@ -369,7 +367,18 @@ def execute_nl_query(
         )
         db.add(log)
         db.commit()
-        raise HTTPException(status_code=400, detail=f"SQL execution error: {str(e)}")
+        # Return structured error with suggested fix
+        suggested_fix = _local_nl_to_sql(body.question, dataset.table_name, columns_info)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"SQL execution error: {str(e)}",
+                "generated_sql": safe_sql,
+                "question": body.question,
+                "suggested_fix": suggested_fix,
+                "error_type": "sql_execution",
+            }
+        )
 
     # Serialize data
     serialized_rows = []
@@ -391,13 +400,17 @@ def execute_nl_query(
     # Generate insights
     insights = generate_insights(body.question, serialized_rows, columns)
 
-    # Generate AI quality indicators
-    ai_quality = generate_ai_quality(body.question, safe_sql, chart_type, validation_result)
+    # Generate AI quality indicators with 8-step scoring
+    ai_quality = generate_ai_quality(
+        body.question, safe_sql, chart_type, validation_result,
+        data_length=len(serialized_rows), sql_success=True
+    )
 
     # Build validation info for response
     validation_info = {
         "valid": validation_result["valid"],
         "issues": validation_result["issues"],
+        "suggested_fix": validation_result.get("suggested_fix"),
     }
 
     # Log query

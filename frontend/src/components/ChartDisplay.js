@@ -4,7 +4,7 @@ import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { BarChart3, TrendingUp, PieChart as PieIcon, AreaChart as AreaIcon, Table2, Target } from 'lucide-react';
+import { BarChart3, TrendingUp, PieChart as PieIcon, AreaChart as AreaChartIcon, Table2, Target, ArrowUpDown } from 'lucide-react';
 
 const COLORS = [
   '#ff3b30', '#ff6b6b', '#ff9500', '#ffcc00', '#34c759',
@@ -31,7 +31,7 @@ const smartAxisKey = (data, columns, preferred) => {
   return columns[0] || '';
 };
 
-const ChartDisplay = ({ data, chartConfig }) => {
+const ChartDisplay = ({ data, chartConfig, intentType }) => {
   const safeData = useMemo(() => {
     if (!data || !Array.isArray(data) || data.length === 0) return [];
     return data.filter(row => row && typeof row === 'object');
@@ -48,7 +48,9 @@ const ChartDisplay = ({ data, chartConfig }) => {
   const numericCols = columns.filter(c => typeof safeData[0]?.[c] === 'number');
   const hasMultiY = numericCols.length > 1 && chartType !== 'pie';
 
-  // KPI Card rendering for single values
+  const isRanking = intentType === 'ranking' || columns.length === 2;
+
+  // KPI Card
   if (chartType === 'kpi') {
     const kpiValue = safeData[0]?.[xKey] ?? safeData[0]?.[yKey] ?? 0;
     const kpiLabel = chartConfig.title || 'Result';
@@ -77,9 +79,9 @@ const ChartDisplay = ({ data, chartConfig }) => {
 
   const getChartIcon = () => {
     switch (chartType) {
-      case 'bar': return <BarChart3 className="w-5 h-5 text-primary-500" />;
+      case 'bar': return isRanking ? <ArrowUpDown className="w-5 h-5 text-primary-500" /> : <BarChart3 className="w-5 h-5 text-primary-500" />;
       case 'line': return <TrendingUp className="w-5 h-5 text-apple-orange" />;
-      case 'area': return <AreaIcon className="w-5 h-5 text-apple-green" />;
+      case 'area': return <AreaChartIcon className="w-5 h-5 text-apple-green" />;
       case 'pie': return <PieIcon className="w-5 h-5 text-apple-purple" />;
       default: return <Table2 className="w-5 h-5 text-dark-400" />;
     }
@@ -103,30 +105,55 @@ const ChartDisplay = ({ data, chartConfig }) => {
   const tickStyle = { fill: '#8e8e93', fontSize: 11, fontFamily: 'Inter, sans-serif' };
   const gridStyle = { strokeDasharray: '3 3', stroke: '#2c2c2e' };
 
-  const renderBarChart = () => (
-    <ResponsiveContainer width="100%" height={400}>
-      <BarChart data={safeData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-        <CartesianGrid {...gridStyle} />
-        <XAxis dataKey={xKey} tick={tickStyle} angle={safeData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
-        <YAxis tick={tickStyle} tickFormatter={formatNumber} />
-        <Tooltip content={<CustomTooltip />} />
-        <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
-        {hasMultiY ? (
-          numericCols.map((col, i) => (
-            <Bar key={col} dataKey={col} fill={COLORS[i % COLORS.length]} radius={[4, 4, 0, 0]} />
-          ))
-        ) : (
-          <Bar dataKey={yKey} fill="url(#barGrad)" radius={[4, 4, 0, 0]} />
-        )}
-        <defs>
-          <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#ff3b30" />
-            <stop offset="100%" stopColor="#c41a1a" />
-          </linearGradient>
-        </defs>
-      </BarChart>
-    </ResponsiveContainer>
-  );
+  const renderBarChart = () => {
+    const isHorizontal = isRanking && safeData.length <= 20;
+
+    if (isHorizontal) {
+      const sorted = [...safeData].sort((a, b) => (b[yKey] || 0) - (a[yKey] || 0));
+      return (
+        <ResponsiveContainer width="100%" height={Math.max(200, sorted.length * 36)}>
+          <BarChart data={sorted} layout="vertical" margin={{ top: 10, right: 30, left: 100, bottom: 10 }}>
+            <CartesianGrid {...gridStyle} horizontal={false} />
+            <XAxis type="number" tick={tickStyle} tickFormatter={formatNumber} />
+            <YAxis dataKey={xKey} type="category" tick={tickStyle} width={90} tickLine={false} axisLine={false} />
+            <Tooltip content={<CustomTooltip />} />
+            <Bar dataKey={yKey} fill="url(#barGrad)" radius={[0, 4, 4, 0]} maxBarSize={24} />
+            <defs>
+              <linearGradient id="barGrad" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stopColor="#ff3b30" />
+                <stop offset="100%" stopColor="#c41a1a" />
+              </linearGradient>
+            </defs>
+          </BarChart>
+        </ResponsiveContainer>
+      );
+    }
+
+    return (
+      <ResponsiveContainer width="100%" height={400}>
+        <BarChart data={safeData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+          <CartesianGrid {...gridStyle} />
+          <XAxis dataKey={xKey} tick={tickStyle} angle={safeData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
+          <YAxis tick={tickStyle} tickFormatter={formatNumber} />
+          <Tooltip content={<CustomTooltip />} />
+          <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
+          {hasMultiY ? (
+            numericCols.map((col, i) => (
+              <Bar key={col} dataKey={col} fill={COLORS[i % COLORS.length]} radius={[4, 4, 0, 0]} />
+            ))
+          ) : (
+            <Bar dataKey={yKey} fill="url(#barGradV)" radius={[4, 4, 0, 0]} />
+          )}
+          <defs>
+            <linearGradient id="barGradV" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#ff3b30" />
+              <stop offset="100%" stopColor="#c41a1a" />
+            </linearGradient>
+          </defs>
+        </BarChart>
+      </ResponsiveContainer>
+    );
+  };
 
   const renderLineChart = () => (
     <ResponsiveContainer width="100%" height={400}>

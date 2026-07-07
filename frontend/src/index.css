@@ -13,7 +13,7 @@
 
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
-    background-color: #0a0a0b;
+    background-color: #0b0b0b;
     color: #e8e8ed;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -48,31 +48,31 @@
   *:focus-visible {
     outline: 2px solid #ff3b30;
     outline-offset: 2px;
-    border-radius: 6px;
+    border-radius: 20px;
   }
 }
 
 @layer components {
-  /* Apple-style glass card - deep black with subtle blur */
+  /* Apple macOS-style glass card - deep black with premium translucency */
   .glass-card {
-    @apply rounded-apple-lg border border-white/[0.06] bg-dark-900/90 backdrop-blur-2xl shadow-apple-sm;
+    @apply rounded-apple-lg border border-white/[0.08] bg-dark-900/85 backdrop-blur-3xl shadow-apple-lg;
   }
 
   .glass-card-hover {
     @apply glass-card transition-all duration-300 ease-out
-           hover:border-primary-500/20 hover:shadow-apple-glow
+           hover:border-primary-500/25 hover:shadow-apple-glow
            active:scale-[0.98];
   }
 
   /* Premium glass card with deeper effect */
   .glass-card-premium {
-    @apply rounded-apple-xl border border-white/[0.08] bg-dark-900/70 backdrop-blur-4xl shadow-apple;
+    @apply rounded-apple-xl border border-white/[0.10] bg-dark-900/65 backdrop-blur-4xl shadow-apple;
   }
 
   /* KPI Card - special for single metric displays */
   .kpi-card {
-    @apply rounded-apple-xl border border-white/[0.06] bg-gradient-to-br from-dark-900/90 to-dark-850/90
-           backdrop-blur-2xl shadow-apple-sm p-6 relative overflow-hidden;
+    @apply rounded-apple-xl border border-white/[0.08] bg-gradient-to-br from-dark-900/85 to-dark-850/85
+           backdrop-blur-3xl shadow-apple-lg p-6 relative overflow-hidden;
   }
 
   .kpi-card::before {
@@ -245,6 +245,21 @@
   100% { transform: scale(0.95); opacity: 1; }
 }
 
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+@keyframes slide-down {
+  0% { opacity: 0; transform: translateY(-8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-up {
+  0% { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
 .animate-float {
   animation: float 4s ease-in-out infinite;
 }
@@ -253,6 +268,18 @@
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.03), transparent);
   background-size: 200% 100%;
   animation: shimmer 3s infinite;
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+
+.animate-slide-down {
+  animation: slide-down 0.3s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
 }
 
 /* Apple-style divider */

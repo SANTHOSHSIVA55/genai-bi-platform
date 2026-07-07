@@ -1,8 +1,8 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { AlertTriangle, RefreshCw, Terminal, FileWarning } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Terminal, FileWarning, Lightbulb } from 'lucide-react';
 
-const ErrorPanel = ({ question, generatedSql, issues, onRegenerate }) => {
+const ErrorPanel = ({ question, generatedSql, issues, onRegenerate, suggestedFix }) => {
   if (!issues || issues.length === 0) return null;
 
   return (
@@ -47,6 +47,20 @@ const ErrorPanel = ({ question, generatedSql, issues, onRegenerate }) => {
             </ul>
           </div>
         </div>
+
+        {suggestedFix && (
+          <div>
+            <div className="error-panel-label flex items-center gap-1.5">
+              <Lightbulb className="w-3 h-3 text-apple-green" />
+              Suggested Fix
+            </div>
+            <div className="error-panel-suggestion">
+              <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap">
+                {suggestedFix}
+              </pre>
+            </div>
+          </div>
+        )}
 
         {onRegenerate && (
           <button
