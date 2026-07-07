@@ -20,34 +20,31 @@ const Navbar = () => {
 
   return (
     <motion.nav
-      initial={{ y: -20, opacity: 0 }}
+      initial={{ y: -16, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
-      className="sticky top-0 z-50 bg-dark-950/95 border-b border-dark-700/30 px-4 sm:px-6 py-3.5 backdrop-blur-md"
+      className="sticky top-0 z-50 bg-dark-950/80 border-b border-white/[0.05] px-4 sm:px-6 py-3 backdrop-blur-4xl"
     >
       <div className="max-w-7xl mx-auto flex items-center justify-between">
-        {/* Logo */}
-        <Link to="/dashboard" className="flex items-center gap-2 group">
-          <div className="w-9 h-9 rounded-lg bg-dark-900 border border-primary-500/30 flex items-center justify-center shadow-md shadow-primary-500/5 group-hover:border-primary-500/80 transition-all duration-300">
-            <Sparkles className="w-5 h-5 text-primary-500 animate-pulse" />
+        <Link to="/dashboard" className="flex items-center gap-2.5 group">
+          <div className="w-8 h-8 rounded-apple bg-dark-800 border border-primary-500/20 flex items-center justify-center group-hover:border-primary-500/50 transition-all duration-300">
+            <Sparkles className="w-4 h-4 text-primary-500" />
           </div>
           <div className="hidden sm:block">
-            <h1 className="text-xl font-black tracking-tighter text-white uppercase select-none">
+            <h1 className="text-base font-bold tracking-tight text-white select-none">
               GenAI<span className="text-primary-500">BI</span>
             </h1>
-            <p className="text-[9px] text-dark-500 -mt-1 font-semibold tracking-widest uppercase">Intelligence</p>
           </div>
         </Link>
 
-        {/* Desktop Navigation */}
-        <div className="hidden md:flex items-center gap-2">
+        <div className="hidden md:flex items-center gap-1">
           {navItems.map((item) => (
             <Link
               key={item.path}
               to={item.path}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all duration-200 ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-apple text-sm font-medium transition-all duration-200 ${
                 isActive(item.path)
-                  ? 'bg-primary-500/10 text-primary-500 border-b-2 border-primary-500 rounded-b-none'
-                  : 'text-dark-300 hover:text-white hover:bg-dark-800/40'
+                  ? 'bg-primary-500/10 text-primary-400'
+                  : 'text-dark-400 hover:text-dark-200 hover:bg-white/[0.04]'
               }`}
             >
               <item.icon className="w-4 h-4" />
@@ -56,36 +53,34 @@ const Navbar = () => {
           ))}
         </div>
 
-        {/* Mobile menu button wrapper */}
         <div className="flex items-center gap-3 md:hidden">
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
-            className="w-11 h-11 flex items-center justify-center rounded-xl text-dark-400 hover:text-dark-200 hover:bg-dark-700/50 transition-colors"
+            className="w-10 h-10 flex items-center justify-center rounded-apple text-dark-400 hover:text-dark-200 hover:bg-white/[0.04] transition-colors"
           >
             {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
       </div>
 
-      {/* Mobile Navigation */}
       <AnimatePresence>
         {mobileOpen && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="md:hidden mt-3 pt-3 border-t border-dark-700/50 overflow-hidden"
+            className="md:hidden mt-3 pt-3 border-t border-white/[0.05] overflow-hidden"
           >
-            <div className="space-y-1">
+            <div className="space-y-1 pb-2">
               {navItems.map((item) => (
                 <Link
                   key={item.path}
                   to={item.path}
                   onClick={() => setMobileOpen(false)}
-                  className={`min-h-[44px] flex items-center gap-3 px-4 py-3 rounded-md text-sm font-bold transition-all ${
+                  className={`min-h-[44px] flex items-center gap-3 px-4 py-3 rounded-apple text-sm font-medium transition-all ${
                     isActive(item.path)
-                      ? 'bg-primary-500/10 text-primary-500'
-                      : 'text-dark-300 hover:text-white hover:bg-dark-800/40'
+                      ? 'bg-primary-500/10 text-primary-400'
+                      : 'text-dark-400 hover:text-dark-200 hover:bg-white/[0.04]'
                   }`}
                 >
                   <item.icon className="w-4 h-4" />

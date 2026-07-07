@@ -59,12 +59,12 @@ const FileUpload = ({ onUploadSuccess }) => {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       className="glass-card p-6"
     >
-      <h2 className="text-lg font-semibold text-dark-100 mb-4 flex items-center gap-2">
-        <Upload className="w-5 h-5 text-primary-400" />
+      <h2 className="text-base font-semibold text-dark-100 mb-4 flex items-center gap-2">
+        <Upload className="w-4 h-4 text-primary-400" />
         Upload Dataset
       </h2>
 
@@ -76,21 +76,21 @@ const FileUpload = ({ onUploadSuccess }) => {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             {...getRootProps()}
-            className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all duration-300 ${
+            className={`border-2 border-dashed rounded-apple-xl p-10 text-center cursor-pointer transition-all duration-300 ${
               isDragActive
-                ? 'border-primary-500 bg-primary-500/10'
-                : 'border-dark-600 hover:border-primary-500/50 hover:bg-dark-800/50'
+                ? 'border-primary-500 bg-primary-500/8'
+                : 'border-white/[0.08] hover:border-primary-500/30 hover:bg-white/[0.02]'
             }`}
           >
             <input {...getInputProps()} />
             <div className="flex flex-col items-center gap-3">
-              <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-primary-500/20 to-amber-500/10 flex items-center justify-center border border-primary-500/10">
-                <Upload className="w-8 h-8 text-primary-400" />
+              <div className="w-14 h-14 rounded-apple-lg bg-primary-500/8 flex items-center justify-center border border-primary-500/10">
+                <Upload className="w-7 h-7 text-primary-400" />
               </div>
-              <p className="text-dark-200 font-medium">
+              <p className="text-dark-200 font-medium text-sm">
                 {isDragActive ? 'Drop your file here...' : 'Drag & drop your file here'}
               </p>
-              <p className="text-dark-500 text-sm">CSV, Excel (.xlsx), or PDF — up to 50MB</p>
+              <p className="text-dark-500 text-xs">CSV, Excel (.xlsx), or PDF &mdash; up to 50MB</p>
             </div>
           </motion.div>
         ) : (
@@ -101,19 +101,19 @@ const FileUpload = ({ onUploadSuccess }) => {
             exit={{ opacity: 0 }}
             className="space-y-4"
           >
-            <div className="flex items-center gap-4 p-4 bg-dark-800 rounded-xl border border-dark-600">
+            <div className="flex items-center gap-4 p-4 bg-dark-800/60 rounded-apple border border-white/[0.06]">
               {getFileIcon(uploadedFile.name)}
-              <div className="flex-1">
-                <p className="text-dark-100 font-medium">{uploadedFile.name}</p>
-                <p className="text-dark-500 text-sm">
+              <div className="flex-1 min-w-0">
+                <p className="text-dark-100 font-medium text-sm truncate">{uploadedFile.name}</p>
+                <p className="text-dark-500 text-xs">
                   {(uploadedFile.size / (1024 * 1024)).toFixed(2)} MB
                 </p>
               </div>
               <button
                 onClick={() => { setUploadedFile(null); setDatasetName(''); }}
-                className="min-h-[44px] min-w-[44px] flex items-center justify-center p-2.5 hover:bg-red-500/10 rounded-lg text-dark-400 hover:text-red-400 transition-colors"
+                className="min-h-[36px] min-w-[36px] flex items-center justify-center p-2 hover:bg-red-500/10 rounded-apple text-dark-400 hover:text-red-400 transition-colors"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -132,13 +132,13 @@ const FileUpload = ({ onUploadSuccess }) => {
             >
               {uploading ? (
                 <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <Loader2 className="w-4 h-4 animate-spin" />
                   Processing...
                 </>
               ) : (
                 <>
-                  <Check className="w-5 h-5" />
-                  Upload & Clean Data
+                  <Check className="w-4 h-4" />
+                  Upload &amp; Clean Data
                 </>
               )}
             </button>

@@ -4,7 +4,7 @@ import { Float, MeshDistortMaterial, MeshWobbleMaterial, Sphere, Torus, Icosahed
 import * as THREE from 'three';
 
 /* ───── Floating Data Sphere ───── */
-const DataSphere = ({ position = [0, 0, 0], color = '#e50914', speed = 1 }) => {
+const DataSphere = ({ position = [0, 0, 0], color = '#ff3b30', speed = 1 }) => {
   const meshRef = useRef();
   useFrame((state) => {
     if (meshRef.current) {
@@ -30,7 +30,7 @@ const DataSphere = ({ position = [0, 0, 0], color = '#e50914', speed = 1 }) => {
 };
 
 /* ───── Orbiting Ring ───── */
-const OrbitRing = ({ radius = 2, color = '#ff3e4b', speed = 0.5, thickness = 0.03 }) => {
+const OrbitRing = ({ radius = 2, color = '#ff6b6b', speed = 0.5, thickness = 0.03 }) => {
   const ringRef = useRef();
   useFrame((state) => {
     if (ringRef.current) {
@@ -61,11 +61,11 @@ const DataParticles = ({ count = 200 }) => {
   const colors = useMemo(() => {
     const cols = new Float32Array(count * 3);
     const palette = [
-      new THREE.Color('#e50914'),
-      new THREE.Color('#ff3e4b'),
-      new THREE.Color('#b81d24'),
-      new THREE.Color('#ffa00a'),
-      new THREE.Color('#ff7e8a'),
+      new THREE.Color('#ff3b30'),
+      new THREE.Color('#ff6b6b'),
+      new THREE.Color('#c41a1a'),
+      new THREE.Color('#ff9500'),
+      new THREE.Color('#ff2d55'),
     ];
     for (let i = 0; i < count; i++) {
       const c = palette[Math.floor(Math.random() * palette.length)];
@@ -95,7 +95,7 @@ const DataParticles = ({ count = 200 }) => {
 };
 
 /* ───── Wireframe Icosahedron ───── */
-const WireGeo = ({ position = [0, 0, 0], color = '#ff3e4b', scale = 1 }) => {
+const WireGeo = ({ position = [0, 0, 0], color = '#ff6b6b', scale = 1 }) => {
   const ref = useRef();
   useFrame((state) => {
     if (ref.current) {
@@ -114,7 +114,7 @@ const WireGeo = ({ position = [0, 0, 0], color = '#ff3e4b', scale = 1 }) => {
 };
 
 /* ───── Neural Node ───── */
-const NeuralNode = ({ position, color = '#e50914' }) => {
+const NeuralNode = ({ position, color = '#ff3b30' }) => {
   const ref = useRef();
   useFrame((state) => {
     if (ref.current) {
@@ -142,7 +142,7 @@ const AIBrain = ({ position = [0, 0, 0], scale = 1 }) => {
     <Float speed={2} rotationIntensity={0.3} floatIntensity={1.2}>
       <Octahedron ref={ref} args={[1]} position={position} scale={scale}>
         <MeshWobbleMaterial
-          color="#ff7e8a"
+          color="#ff2d55"
           roughness={0.1}
           metalness={0.9}
           factor={0.2}
@@ -165,16 +165,16 @@ export const HeroScene = () => (
     gl={{ alpha: true, antialias: true }}
   >
     <ambientLight intensity={0.3} />
-    <pointLight position={[10, 10, 10]} intensity={1} color="#e50914" />
-    <pointLight position={[-10, -5, 5]} intensity={0.5} color="#b81d24" />
-    <spotLight position={[5, 5, 5]} angle={0.3} penumbra={1} intensity={0.8} color="#ff3e4b" />
+    <pointLight position={[10, 10, 10]} intensity={1} color="#ff3b30" />
+    <pointLight position={[-10, -5, 5]} intensity={0.5} color="#c41a1a" />
+    <spotLight position={[5, 5, 5]} angle={0.3} penumbra={1} intensity={0.8} color="#ff6b6b" />
     <Suspense fallback={null}>
-      <DataSphere position={[0, 0.3, 0]} color="#e50914" speed={0.8} />
-      <OrbitRing radius={2} color="#ff3e4b" speed={0.3} />
-      <OrbitRing radius={2.5} color="#b81d24" speed={0.5} thickness={0.02} />
-      <OrbitRing radius={3} color="#ffa00a" speed={0.2} thickness={0.01} />
-      <WireGeo position={[3.5, 1.5, -2]} color="#ff7e8a" scale={0.7} />
-      <WireGeo position={[-3.5, -1, -1]} color="#ffa00a" scale={0.5} />
+      <DataSphere position={[0, 0.3, 0]} color="#ff3b30" speed={0.8} />
+      <OrbitRing radius={2} color="#ff6b6b" speed={0.3} />
+      <OrbitRing radius={2.5} color="#c41a1a" speed={0.5} thickness={0.02} />
+      <OrbitRing radius={3} color="#ff9500" speed={0.2} thickness={0.01} />
+      <WireGeo position={[3.5, 1.5, -2]} color="#ff2d55" scale={0.7} />
+      <WireGeo position={[-3.5, -1, -1]} color="#ff9500" scale={0.5} />
       <AIBrain position={[-2.5, 2, -1]} scale={0.4} />
       <DataParticles count={300} />
     </Suspense>
@@ -189,12 +189,12 @@ export const DashboardScene = () => (
     gl={{ alpha: true, antialias: true }}
   >
     <ambientLight intensity={0.2} />
-    <pointLight position={[5, 5, 5]} intensity={0.5} color="#e50914" />
+    <pointLight position={[5, 5, 5]} intensity={0.5} color="#ff3b30" />
     <Suspense fallback={null}>
       <DataParticles count={150} />
-      <WireGeo position={[4, 2, -3]} color="#ff3e4b" scale={0.4} />
-      <WireGeo position={[-4, -2, -2]} color="#b81d24" scale={0.3} />
-      <OrbitRing radius={5} color="#333333" speed={0.1} thickness={0.01} />
+      <WireGeo position={[4, 2, -3]} color="#ff6b6b" scale={0.4} />
+      <WireGeo position={[-4, -2, -2]} color="#c41a1a" scale={0.3} />
+      <OrbitRing radius={5} color="#48484a" speed={0.1} thickness={0.01} />
     </Suspense>
   </Canvas>
 );
@@ -207,13 +207,13 @@ export const AuthScene = () => (
     gl={{ alpha: true, antialias: true }}
   >
     <ambientLight intensity={0.2} />
-    <pointLight position={[5, 5, 5]} intensity={0.6} color="#e50914" />
-    <pointLight position={[-5, -5, 5]} intensity={0.4} color="#b81d24" />
+    <pointLight position={[5, 5, 5]} intensity={0.6} color="#ff3b30" />
+    <pointLight position={[-5, -5, 5]} intensity={0.4} color="#c41a1a" />
     <Suspense fallback={null}>
       <AIBrain position={[3, 1.5, -1]} scale={0.5} />
-      <WireGeo position={[-3, -1.5, -2]} color="#ff3e4b" scale={0.6} />
+      <WireGeo position={[-3, -1.5, -2]} color="#ff6b6b" scale={0.6} />
       <DataParticles count={100} />
-      <OrbitRing radius={3} color="#333333" speed={0.15} thickness={0.01} />
+      <OrbitRing radius={3} color="#48484a" speed={0.15} thickness={0.01} />
     </Suspense>
   </Canvas>
 );
@@ -226,15 +226,15 @@ export const MiniDataViz = ({ type = 'sphere' }) => (
     gl={{ alpha: true, antialias: true }}
   >
     <ambientLight intensity={0.4} />
-    <pointLight position={[3, 3, 3]} intensity={0.8} color="#e50914" />
+    <pointLight position={[3, 3, 3]} intensity={0.8} color="#ff3b30" />
     <Suspense fallback={null}>
-      {type === 'sphere' && <DataSphere position={[0, 0, 0]} color="#e50914" speed={0.6} />}
+      {type === 'sphere' && <DataSphere position={[0, 0, 0]} color="#ff3b30" speed={0.6} />}
       {type === 'brain' && <AIBrain position={[0, 0, 0]} scale={0.8} />}
-      {type === 'wire' && <WireGeo position={[0, 0, 0]} color="#ff3e4b" scale={1} />}
+      {type === 'wire' && <WireGeo position={[0, 0, 0]} color="#ff6b6b" scale={1} />}
       {type === 'ring' && (
         <>
-          <OrbitRing radius={1} color="#ff3e4b" speed={0.5} thickness={0.03} />
-          <OrbitRing radius={1.3} color="#b81d24" speed={0.3} thickness={0.02} />
+          <OrbitRing radius={1} color="#ff6b6b" speed={0.5} thickness={0.03} />
+          <OrbitRing radius={1.3} color="#c41a1a" speed={0.3} thickness={0.02} />
         </>
       )}
     </Suspense>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  History, Search, Trash2, Clock, MessageSquare, Database,
+  History, Search, Clock, MessageSquare, Database,
   ChevronDown, ChevronUp, Loader2, Code2, ArrowRight,
   Calendar, Filter
 } from 'lucide-react';
@@ -22,7 +22,6 @@ const HistoryPage = () => {
       setQueries(data);
     } catch (err) {
       console.warn('Could not fetch history:', err);
-      // Demo data
       setQueries([
         {
           id: '1',
@@ -103,28 +102,27 @@ const HistoryPage = () => {
 
   const getChartBadge = (type) => {
     const styles = {
-      bar: 'bg-primary-500/10 text-primary-500 border-primary-500/20',
-      line: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
-      pie: 'bg-rose-500/10 text-rose-500 border-rose-500/20',
-      table: 'bg-dark-700 text-dark-400 border-dark-600',
+      bar: 'bg-primary-500/10 text-primary-400 border-primary-500/15',
+      line: 'bg-apple-orange/10 text-apple-orange border-apple-orange/15',
+      pie: 'bg-apple-purple/10 text-apple-purple border-apple-purple/15',
+      table: 'bg-dark-700/50 text-dark-400 border-white/[0.05]',
     };
     return styles[type] || styles.table;
   };
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <motion.div
-        initial={{ opacity: 0, y: -10 }}
+        initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
         className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
       >
         <div>
-          <h1 className="text-3xl font-bold text-white flex items-center gap-3">
-            <History className="w-7 h-7 text-primary-400" />
+          <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+            <History className="w-6 h-6 text-primary-400" />
             Query History
           </h1>
-          <p className="text-dark-400 mt-1">Browse and re-run your previous queries</p>
+          <p className="text-dark-400 text-sm mt-0.5">Browse and re-run your previous queries</p>
         </div>
         <div className="flex items-center gap-2 text-sm text-dark-400">
           <Calendar className="w-4 h-4" />
@@ -132,21 +130,20 @@ const HistoryPage = () => {
         </div>
       </motion.div>
 
-      {/* Search & Filter */}
       <motion.div
-        initial={{ opacity: 0, y: 10 }}
+        initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
+        transition={{ delay: 0.08 }}
         className="flex flex-col sm:flex-row gap-3"
       >
         <div className="relative flex-1">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-dark-500" />
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-500" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search queries or datasets..."
-            className="input-field pl-12"
+            className="input-field pl-10"
           />
         </div>
         <button
@@ -159,7 +156,6 @@ const HistoryPage = () => {
         </button>
       </motion.div>
 
-      {/* Query List */}
       {loading ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 className="w-8 h-8 text-primary-400 animate-spin" />
@@ -170,8 +166,8 @@ const HistoryPage = () => {
           animate={{ opacity: 1 }}
           className="flex flex-col items-center py-20 text-center"
         >
-          <div className="w-16 h-16 rounded-2xl bg-dark-800 flex items-center justify-center mb-4">
-            <MessageSquare className="w-8 h-8 text-dark-600" />
+          <div className="w-14 h-14 rounded-2xl bg-dark-800/60 flex items-center justify-center mb-4 border border-white/[0.04]">
+            <MessageSquare className="w-7 h-7 text-dark-500" />
           </div>
           <p className="text-dark-300 font-medium mb-1">
             {search ? 'No matching queries' : 'No queries yet'}
@@ -181,52 +177,50 @@ const HistoryPage = () => {
           </p>
         </motion.div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           <AnimatePresence>
             {filtered.map((q, i) => (
               <motion.div
                 key={q.id}
-                initial={{ opacity: 0, y: 10 }}
+                initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
+                exit={{ opacity: 0, y: -8 }}
                 transition={{ delay: i * 0.03 }}
                 className="glass-card-hover overflow-hidden"
               >
-                {/* Main row */}
                 <button
                   onClick={() => setExpandedId(expandedId === q.id ? null : q.id)}
-                  className="w-full text-left p-5 flex items-center gap-4"
+                  className="w-full text-left p-4 flex items-center gap-3"
                 >
-                  <div className="w-10 h-10 rounded-xl bg-primary-500/10 flex items-center justify-center flex-shrink-0">
-                    <MessageSquare className="w-5 h-5 text-primary-400" />
+                  <div className="w-9 h-9 rounded-apple bg-primary-500/8 flex items-center justify-center flex-shrink-0 border border-primary-500/10">
+                    <MessageSquare className="w-4 h-4 text-primary-400" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-dark-100 font-medium truncate">{q.question}</p>
-                    <div className="flex items-center gap-3 mt-1">
+                    <p className="text-dark-100 text-sm font-medium truncate">{q.question}</p>
+                    <div className="flex items-center gap-3 mt-0.5">
                       <span className="text-dark-500 text-xs flex items-center gap-1">
                         <Database className="w-3 h-3" />
                         {q.dataset_name || 'Unknown Dataset'}
                       </span>
-                      <span className="text-dark-600 text-xs flex items-center gap-1">
+                      <span className="text-dark-500 text-xs flex items-center gap-1">
                         <Clock className="w-3 h-3" />
                         {formatTime(q.created_at)}
                       </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 flex-shrink-0">
+                  <div className="flex items-center gap-2.5 flex-shrink-0">
                     {q.chart_type && (
-                      <span className={`px-2.5 py-1 rounded-lg text-xs font-medium border ${getChartBadge(q.chart_type)}`}>
+                      <span className={`px-2 py-0.5 rounded-lg text-[10px] font-medium border ${getChartBadge(q.chart_type)}`}>
                         {q.chart_type}
                       </span>
                     )}
                     {q.row_count != null && (
                       <span className="text-dark-500 text-xs">{q.row_count} rows</span>
                     )}
-                    <ChevronDown className={`w-4 h-4 text-dark-500 transition-transform ${expandedId === q.id ? 'rotate-180' : ''}`} />
+                    <ChevronDown className={`w-3.5 h-3.5 text-dark-500 transition-transform ${expandedId === q.id ? 'rotate-180' : ''}`} />
                   </div>
                 </button>
 
-                {/* Expanded details */}
                 <AnimatePresence>
                   {expandedId === q.id && (
                     <motion.div
@@ -236,22 +230,22 @@ const HistoryPage = () => {
                       transition={{ duration: 0.2 }}
                       className="overflow-hidden"
                     >
-                      <div className="px-5 pb-5 pt-0 border-t border-dark-700/50">
+                      <div className="px-4 pb-4 pt-0 border-t border-white/[0.05]">
                         {q.generated_sql && (
-                          <div className="mt-4">
-                            <p className="text-xs font-medium text-dark-400 mb-2 flex items-center gap-1">
+                          <div className="mt-3">
+                            <p className="text-xs font-medium text-dark-400 mb-1.5 flex items-center gap-1">
                               <Code2 className="w-3 h-3" />
                               Generated SQL
                             </p>
-                            <pre className="text-sm text-dark-300 bg-dark-900 p-4 rounded-xl overflow-x-auto font-mono">
+                            <pre className="text-sm text-dark-300 bg-dark-950/50 p-3 rounded-apple overflow-x-auto font-mono border border-white/[0.04]">
                               {q.generated_sql}
                             </pre>
                           </div>
                         )}
-                        <div className="flex gap-3 mt-4">
-                          <button className="btn-primary text-sm flex items-center gap-2">
+                        <div className="flex gap-3 mt-3">
+                          <button className="btn-primary text-xs flex items-center gap-2">
                             Re-run Query
-                            <ArrowRight className="w-4 h-4" />
+                            <ArrowRight className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </div>

@@ -8,11 +8,10 @@ import UploadPage from './pages/UploadPage';
 import HistoryPage from './pages/HistoryPage';
 import Navbar from './components/Navbar';
 
-/* Layout with Navbar */
 const AppLayout = ({ children }) => (
   <div className="min-h-screen bg-dark-950 grid-bg relative">
     <Navbar />
-    <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-6 pb-16 relative z-10">
+    <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-5 pb-16 relative z-10">
       {children}
     </main>
   </div>
@@ -22,26 +21,25 @@ const App = () => (
   <AuthProvider>
     <Router>
       <Toaster
-        position="top-right"
+        position="top-center"
         toastOptions={{
           style: {
-            background: '#1e293b',
-            color: '#e2e8f0',
-            border: '1px solid #334155',
-            borderRadius: '12px',
+            background: '#2c2c2e',
+            color: '#e8e8ed',
+            border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: '10px',
+            fontSize: '14px',
+            fontFamily: 'Inter, -apple-system, sans-serif',
           },
-          success: { iconTheme: { primary: '#34d399', secondary: '#0f172a' } },
-          error: { iconTheme: { primary: '#f87171', secondary: '#0f172a' } },
+          success: { iconTheme: { primary: '#34c759', secondary: '#1c1c1e' } },
+          error: { iconTheme: { primary: '#ff3b30', secondary: '#1c1c1e' } },
         }}
       />
       <Routes>
-        {/* Public Routes */}
         <Route path="/" element={<Landing />} />
         <Route path="/dashboard" element={<AppLayout><Dashboard /></AppLayout>} />
         <Route path="/upload" element={<AppLayout><UploadPage /></AppLayout>} />
         <Route path="/history" element={<AppLayout><HistoryPage /></AppLayout>} />
-
-        {/* Catch-all & Auth redirects to dashboard */}
         <Route path="/login" element={<Navigate to="/dashboard" />} />
         <Route path="/register" element={<Navigate to="/dashboard" />} />
         <Route path="*" element={<Navigate to="/" />} />

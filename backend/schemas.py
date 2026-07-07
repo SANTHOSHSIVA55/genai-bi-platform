@@ -61,6 +61,19 @@ class NLQueryRequest(BaseModel):
     dataset_id: str
 
 
+class ValidationInfo(BaseModel):
+    valid: bool
+    issues: List[str] = []
+
+
+class AIQuality(BaseModel):
+    intent_detected: bool = True
+    sql_validated: bool = True
+    chart_selected_correctly: bool = True
+    summary_generated: bool = True
+    issues: List[str] = []
+
+
 class QueryResultResponse(BaseModel):
     question: str
     generated_sql: str
@@ -69,6 +82,8 @@ class QueryResultResponse(BaseModel):
     chart_config: dict
     summary: dict
     follow_up_questions: List[str]
+    ai_quality: Optional[AIQuality] = None
+    validation_info: Optional[ValidationInfo] = None
 
 
 class QueryLogResponse(BaseModel):

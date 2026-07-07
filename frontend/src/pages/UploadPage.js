@@ -68,76 +68,71 @@ const UploadPage = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <motion.div
-        initial={{ opacity: 0, y: -10 }}
+        initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
       >
-        <h1 className="text-3xl font-bold text-white flex items-center gap-3">
-          <Upload className="w-7 h-7 text-primary-400" />
+        <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+          <Upload className="w-6 h-6 text-primary-400" />
           Data Upload
         </h1>
-        <p className="text-dark-400 mt-1">Upload and manage your datasets</p>
+        <p className="text-dark-400 text-sm mt-0.5">Upload and manage your datasets</p>
       </motion.div>
 
       <div className="grid lg:grid-cols-2 gap-6">
-        {/* Upload Widget */}
         <FileUpload onUploadSuccess={handleUploadSuccess} />
 
-        {/* Storage Info */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
+          transition={{ delay: 0.08 }}
           className="glass-card p-6"
         >
-          <h2 className="text-lg font-semibold text-dark-100 mb-4 flex items-center gap-2">
-            <HardDrive className="w-5 h-5 text-purple-400" />
+          <h2 className="text-base font-semibold text-dark-100 mb-4 flex items-center gap-2">
+            <HardDrive className="w-4 h-4 text-apple-blue" />
             Storage Overview
           </h2>
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            <div className="p-4 rounded-xl bg-dark-800/50 text-center">
-              <p className="text-2xl font-bold text-primary-400">{datasets.length}</p>
-              <p className="text-dark-500 text-xs mt-1">Datasets</p>
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            <div className="p-3 rounded-apple bg-dark-800/40 border border-white/[0.04] text-center">
+              <p className="text-xl font-bold text-primary-400">{datasets.length}</p>
+              <p className="text-dark-500 text-xs mt-0.5">Datasets</p>
             </div>
-            <div className="p-4 rounded-xl bg-dark-800/50 text-center">
-              <p className="text-2xl font-bold text-emerald-400">
+            <div className="p-3 rounded-apple bg-dark-800/40 border border-white/[0.04] text-center">
+              <p className="text-xl font-bold text-apple-green">
                 {datasets.reduce((s, d) => s + (d.row_count || 0), 0).toLocaleString()}
               </p>
-              <p className="text-dark-500 text-xs mt-1">Total Rows</p>
+              <p className="text-dark-500 text-xs mt-0.5">Total Rows</p>
             </div>
-            <div className="p-4 rounded-xl bg-dark-800/50 text-center">
-              <p className="text-2xl font-bold text-purple-400">
+            <div className="p-3 rounded-apple bg-dark-800/40 border border-white/[0.04] text-center">
+              <p className="text-xl font-bold text-apple-blue">
                 {formatFileSize(datasets.reduce((s, d) => s + (d.file_size || 0), 0))}
               </p>
-              <p className="text-dark-500 text-xs mt-1">Storage Used</p>
+              <p className="text-dark-500 text-xs mt-0.5">Storage Used</p>
             </div>
           </div>
 
-          {/* Storage bar */}
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-dark-400">Storage Usage</span>
-              <span className="text-dark-300">
+              <span className="text-dark-300 text-xs">
                 {formatFileSize(datasets.reduce((s, d) => s + (d.file_size || 0), 0))} / 500 MB
               </span>
             </div>
-            <div className="h-2 bg-dark-800 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-dark-800 rounded-full overflow-hidden">
               <motion.div
                 initial={{ width: 0 }}
                 animate={{ width: `${Math.min((datasets.reduce((s, d) => s + (d.file_size || 0), 0) / (500 * 1024 * 1024)) * 100, 100)}%` }}
                 transition={{ duration: 1, ease: 'easeOut' }}
-                className="h-full bg-gradient-to-r from-primary-500 to-amber-500 rounded-full"
+                className="h-full bg-gradient-to-r from-primary-500 to-primary-400 rounded-full"
               />
             </div>
           </div>
 
-          {/* Supported formats */}
-          <div className="mt-6 p-4 rounded-xl bg-dark-800/30 border border-dark-700/30">
-            <p className="text-sm font-medium text-dark-300 mb-2">Supported Formats</p>
+          <div className="mt-5 p-4 rounded-apple bg-dark-800/30 border border-white/[0.04]">
+            <p className="text-xs font-medium text-dark-400 mb-2">Supported Formats</p>
             <div className="flex flex-wrap gap-2">
               {['CSV', 'XLSX', 'XLS', 'PDF'].map((fmt) => (
-                <span key={fmt} className="px-3 py-1 rounded-lg bg-dark-700 text-dark-400 text-xs font-medium">
+                <span key={fmt} className="px-2.5 py-1 rounded-lg bg-dark-700/50 text-dark-400 text-[10px] font-medium border border-white/[0.04]">
                   .{fmt.toLowerCase()}
                 </span>
               ))}
@@ -146,15 +141,14 @@ const UploadPage = () => {
         </motion.div>
       </div>
 
-      {/* Datasets Table */}
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+        transition={{ delay: 0.15 }}
         className="glass-card p-6"
       >
-        <h2 className="text-lg font-semibold text-dark-100 mb-4 flex items-center gap-2">
-          <Database className="w-5 h-5 text-emerald-400" />
+        <h2 className="text-base font-semibold text-dark-100 mb-4 flex items-center gap-2">
+          <Database className="w-4 h-4 text-apple-green" />
           Uploaded Datasets
           <span className="ml-auto text-sm text-dark-500 font-normal">
             {datasets.length} dataset{datasets.length !== 1 ? 's' : ''}
@@ -167,8 +161,8 @@ const UploadPage = () => {
           </div>
         ) : datasets.length === 0 ? (
           <div className="flex flex-col items-center py-16 text-center">
-            <div className="w-16 h-16 rounded-2xl bg-dark-800 flex items-center justify-center mb-4">
-              <Database className="w-8 h-8 text-dark-600" />
+            <div className="w-14 h-14 rounded-2xl bg-dark-800/60 flex items-center justify-center mb-4 border border-white/[0.04]">
+              <Database className="w-7 h-7 text-dark-500" />
             </div>
             <p className="text-dark-300 font-medium mb-1">No datasets yet</p>
             <p className="text-dark-500 text-sm">Upload your first dataset to get started</p>
@@ -177,7 +171,7 @@ const UploadPage = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-dark-700">
+                <tr className="border-b border-white/[0.06]">
                   <th className="px-4 py-3 text-left text-dark-400 font-medium text-xs uppercase tracking-wider">Name</th>
                   <th className="px-4 py-3 text-left text-dark-400 font-medium text-xs uppercase tracking-wider">Type</th>
                   <th className="px-4 py-3 text-right text-dark-400 font-medium text-xs uppercase tracking-wider">Rows</th>
@@ -192,25 +186,25 @@ const UploadPage = () => {
                   {datasets.map((ds, i) => (
                     <motion.tr
                       key={ds.id}
-                      initial={{ opacity: 0, x: -10 }}
+                      initial={{ opacity: 0, x: -8 }}
                       animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: 10 }}
-                      transition={{ delay: i * 0.05 }}
-                      className="border-b border-dark-800 hover:bg-dark-800/50 transition-colors"
+                      exit={{ opacity: 0, x: 8 }}
+                      transition={{ delay: i * 0.04 }}
+                      className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors"
                     >
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-3">
                           {getFileIcon(ds.file_type)}
-                          <span className="text-dark-100 font-medium">{ds.name}</span>
+                          <span className="text-dark-100 font-medium text-sm">{ds.name}</span>
                         </div>
                       </td>
                       <td className="px-4 py-4">
-                        <span className="px-2 py-1 rounded bg-dark-700 text-dark-400 text-xs uppercase">{ds.file_type}</span>
+                        <span className="px-2 py-0.5 rounded bg-dark-700/50 text-dark-400 text-xs uppercase border border-white/[0.04]">{ds.file_type}</span>
                       </td>
-                      <td className="px-4 py-4 text-right text-dark-300">{(ds.row_count || 0).toLocaleString()}</td>
-                      <td className="px-4 py-4 text-right text-dark-300">{ds.column_count || 0}</td>
-                      <td className="px-4 py-4 text-right text-dark-400">{formatFileSize(ds.file_size)}</td>
-                      <td className="px-4 py-4 text-right text-dark-500">{ds.created_at ? new Date(ds.created_at).toLocaleDateString() : '—'}</td>
+                      <td className="px-4 py-4 text-right text-dark-300 text-sm">{(ds.row_count || 0).toLocaleString()}</td>
+                      <td className="px-4 py-4 text-right text-dark-300 text-sm">{ds.column_count || 0}</td>
+                      <td className="px-4 py-4 text-right text-dark-400 text-sm">{formatFileSize(ds.file_size)}</td>
+                      <td className="px-4 py-4 text-right text-dark-500 text-sm">{ds.created_at ? new Date(ds.created_at).toLocaleDateString() : '\u2014'}</td>
                       <td className="px-4 py-4 text-right">
                         <button
                           onClick={() => handleDelete(ds.id, ds.name)}

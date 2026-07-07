@@ -159,7 +159,7 @@ const Landing = () => {
       </section>
 
       {/* ═══════ STATS BAR ═══════ */}
-      <section className="relative z-10 py-16 border-y border-dark-800">
+      <section className="relative z-10 py-16 border-y border-white/[0.06]">
         <div className="max-w-6xl mx-auto px-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
             {stats.map((stat, i) => (
@@ -253,7 +253,7 @@ const Landing = () => {
       </section>
 
       {/* ═══════ HOW IT WORKS ═══════ */}
-      <section className="relative z-10 py-24 px-4 bg-dark-900/50">
+      <section className="relative z-10 py-24 px-4 bg-dark-800/30">
         <div className="max-w-5xl mx-auto">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -277,7 +277,7 @@ const Landing = () => {
                 transition={{ delay: i * 0.15 }}
                 className="relative glass-card-hover p-8 group"
               >
-                <span className="text-6xl font-black text-dark-700 group-hover:text-primary-900/10 transition-colors absolute top-4 right-4">
+                <span className="text-6xl font-black text-white/[0.04] group-hover:text-primary-500/8 transition-colors absolute top-4 right-4">
                   {step.num}
                 </span>
                 <div className="relative z-10">
@@ -325,10 +325,10 @@ const Landing = () => {
       </section>
 
       {/* ═══════ FOOTER ═══════ */}
-      <footer className="relative z-10 py-12 px-4 border-t border-dark-800">
+      <footer className="relative z-10 py-12 px-4 border-t border-white/[0.06]">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-dark-900 border border-primary-500/30 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-apple bg-dark-800 border border-primary-500/20 flex items-center justify-center">
               <Sparkles className="w-4 h-4 text-primary-500" />
             </div>
             <span className="font-black text-white uppercase tracking-tighter select-none">GenAI<span className="text-primary-500">BI</span></span>

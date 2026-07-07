@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Database, Rows3, Columns3, TrendingUp } from 'lucide-react';
 
-const useCountUp = (end, duration = 1200) => {
+const useCountUp = (end, duration = 1000) => {
   const [count, setCount] = useState(0);
   const ref = useRef(null);
 
@@ -41,49 +41,53 @@ const KPICards = ({ datasets, queryCount }) => {
       label: 'Datasets',
       value: datasets.length,
       icon: Database,
-      gradient: 'from-primary-500 to-primary-700',
-      glow: 'shadow-primary-500/20',
+      accent: 'from-primary-500/10 to-primary-600/5',
+      iconBg: 'bg-primary-500/10',
+      iconColor: 'text-primary-400',
     },
     {
       label: 'Total Rows',
       value: totalRows,
       icon: Rows3,
-      gradient: 'from-red-500 to-rose-700',
-      glow: 'shadow-red-500/20',
+      accent: 'from-red-500/10 to-rose-600/5',
+      iconBg: 'bg-red-500/10',
+      iconColor: 'text-red-400',
     },
     {
       label: 'Total Columns',
       value: totalCols,
       icon: Columns3,
-      gradient: 'from-amber-500 to-amber-700',
-      glow: 'shadow-amber-500/20',
+      accent: 'from-apple-orange/10 to-amber-600/5',
+      iconBg: 'bg-apple-orange/10',
+      iconColor: 'text-apple-orange',
     },
     {
       label: 'Queries Run',
       value: queryCount || 0,
       icon: TrendingUp,
-      gradient: 'from-emerald-500 to-emerald-700',
-      glow: 'shadow-emerald-500/20',
+      accent: 'from-apple-green/10 to-emerald-600/5',
+      iconBg: 'bg-apple-green/10',
+      iconColor: 'text-apple-green',
     },
   ];
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
       {cards.map((card, i) => (
         <motion.div
           key={card.label}
-          initial={{ opacity: 0, y: 20, scale: 0.95 }}
+          initial={{ opacity: 0, y: 12, scale: 0.97 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ delay: i * 0.08, type: 'spring', stiffness: 200 }}
-          className={`glass-card-hover p-5 shadow-lg ${card.glow} hover:scale-[1.02] transition-transform`}
+          transition={{ delay: i * 0.06, type: 'spring', stiffness: 200, damping: 20 }}
+          className="kpi-card"
         >
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-dark-400 text-sm font-medium">{card.label}</span>
-            <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${card.gradient} flex items-center justify-center shadow-lg`}>
-              <card.icon className="w-5 h-5 text-white" />
+          <div className="flex items-center justify-between mb-2">
+            <span className="kpi-label">{card.label}</span>
+            <div className={`w-8 h-8 rounded-apple ${card.iconBg} border border-white/[0.05] flex items-center justify-center`}>
+              <card.icon className={`w-4 h-4 ${card.iconColor}`} />
             </div>
           </div>
-          <p className="text-2xl sm:text-3xl font-bold text-dark-100">
+          <p className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
             <AnimatedNumber value={card.value} />
           </p>
         </motion.div>

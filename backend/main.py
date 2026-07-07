@@ -23,8 +23,8 @@ from auth import (
     get_current_user, require_admin,
 )
 from data_cleaner import read_uploaded_file, clean_dataframe, get_column_info
-from sql_validator import validate_sql, sanitize_column_name
-from ai_engine import nl_to_sql, detect_chart_type, generate_insights
+from sql_validator import validate_sql, validate_sql_intent, sanitize_column_name
+from ai_engine import nl_to_sql, detect_chart_type, generate_insights, generate_ai_quality
 
 load_dotenv()
 
@@ -306,8 +306,13 @@ def execute_nl_query(
     if current_user.role != "admin" and dataset.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # Parse columns info for validation
+    columns_info = dataset.columns_info or ""
+    cols_parsed = json.loads(columns_info) if columns_info else []
+    col_names = [c["name"] for c in cols_parsed]
+
     # Generate SQL
-    generated_sql = nl_to_sql(body.question, dataset.table_name, dataset.columns_info or "")
+    generated_sql = nl_to_sql(body.question, dataset.table_name, columns_info)
 
     if generated_sql.startswith("AI_ERROR"):
         log = QueryLog(
@@ -324,16 +329,34 @@ def execute_nl_query(
         db.commit()
         raise HTTPException(status_code=500, detail=generated_sql)
 
-    # Validate SQL
+    # Validate SQL intent - check if SQL matches user intent
+    validation_result = validate_sql_intent(body.question, generated_sql, col_names)
+
+    # Auto-regenerate if validation fails
+    if not validation_result["valid"]:
+        regenerated_sql = nl_to_sql(body.question, dataset.table_name, columns_info)
+        # Re-validate regenerated SQL
+        revalidation = validate_sql_intent(body.question, regenerated_sql, col_names)
+        if revalidation["valid"]:
+            generated_sql = regenerated_sql
+            validation_result = revalidation
+        else:
+            # If still invalid, use it anyway but mark issues
+            generated_sql = regenerated_sql
+            validation_result["issues"].extend(revalidation["issues"])
+
+    # Safety validate SQL
     safe_sql = validate_sql(generated_sql, allowed_tables=[dataset.table_name])
 
     # Execute query
+    sql_error = None
     try:
         with engine.connect() as conn:
             result = conn.execute(text(safe_sql))
             columns = list(result.keys())
             rows = [dict(zip(columns, row)) for row in result.fetchall()]
     except Exception as e:
+        sql_error = str(e)
         log = QueryLog(
             id=str(uuid.uuid4()),
             user_id=current_user.id,
@@ -342,7 +365,7 @@ def execute_nl_query(
             question=body.question,
             generated_sql=safe_sql,
             is_successful=False,
-            error_message=str(e),
+            error_message=sql_error,
         )
         db.add(log)
         db.commit()
@@ -368,6 +391,15 @@ def execute_nl_query(
     # Generate insights
     insights = generate_insights(body.question, serialized_rows, columns)
 
+    # Generate AI quality indicators
+    ai_quality = generate_ai_quality(body.question, safe_sql, chart_type, validation_result)
+
+    # Build validation info for response
+    validation_info = {
+        "valid": validation_result["valid"],
+        "issues": validation_result["issues"],
+    }
+
     # Log query
     log = QueryLog(
         id=str(uuid.uuid4()),
@@ -392,6 +424,8 @@ def execute_nl_query(
         chart_config=chart_config,
         summary=insights,
         follow_up_questions=insights.get("follow_up_questions", []),
+        ai_quality=ai_quality,
+        validation_info=validation_info,
     )
 
 
