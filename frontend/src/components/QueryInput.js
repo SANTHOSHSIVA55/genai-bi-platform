@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Search, Sparkles, Loader2, ChevronDown, Database } from 'lucide-react';
 
@@ -7,10 +7,19 @@ const QueryInput = ({ datasets, onSubmit, loading }) => {
   const [selectedDataset, setSelectedDataset] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
 
+  // Auto-select first dataset when datasets load
+  useEffect(() => {
+    if (datasets.length > 0 && !selectedDataset) {
+      setSelectedDataset(datasets[0].id);
+    }
+  }, [datasets, selectedDataset]);
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!question.trim() || !selectedDataset) return;
-    onSubmit({ question: question.trim(), dataset_id: selectedDataset });
+    const datasetId = selectedDataset || (datasets.length > 0 ? datasets[0].id : '');
+    if (!question.trim() || !datasetId) return;
+    console.log('[QueryInput] Submitting with dataset_id:', datasetId, 'question:', question.trim());
+    onSubmit({ question: question.trim(), dataset_id: datasetId });
   };
 
   const handleSuggestion = (q) => {

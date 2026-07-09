@@ -301,10 +301,29 @@ def execute_nl_query(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # ── Debug logging ──
+    print(f"[QUERY] Received dataset_id: '{body.dataset_id}' (type: {type(body.dataset_id).__name__}, len: {len(body.dataset_id)})")
+    print(f"[QUERY] Question: '{body.question}'")
+
     dataset = db.query(Dataset).filter(Dataset.id == body.dataset_id).first()
     if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        # Try fallback: trim/cast in case of whitespace issues
+        cleaned_id = body.dataset_id.strip()
+        if cleaned_id != body.dataset_id:
+            dataset = db.query(Dataset).filter(Dataset.id == cleaned_id).first()
+        if not dataset:
+            print(f"[QUERY] Dataset NOT FOUND for ID: '{body.dataset_id}'")
+            # Log all dataset IDs in DB for debugging
+            all_ids = [d.id for d in db.query(Dataset.id).all()]
+            print(f"[QUERY] Available dataset IDs in DB: {all_ids}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Dataset not found. Received ID: '{body.dataset_id}'"
+            )
+    print(f"[QUERY] Dataset found: '{dataset.name}' (table: {dataset.table_name})")
+
     if current_user.role != "admin" and dataset.owner_id != current_user.id:
+        print(f"[QUERY] Access denied: user {current_user.id} cannot access dataset owned by {dataset.owner_id}")
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Parse columns info for validation
