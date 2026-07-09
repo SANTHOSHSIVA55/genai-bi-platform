@@ -14,8 +14,13 @@ def read_uploaded_file(file_content: bytes, filename: str) -> pd.DataFrame:
     try:
         if ext == "csv":
             df = pd.read_csv(io.BytesIO(file_content))
-        elif ext in ("xlsx", "xls"):
+        elif ext == "xlsx":
             df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl")
+        elif ext == "xls":
+            try:
+                df = pd.read_excel(io.BytesIO(file_content), engine="xlrd")
+            except Exception:
+                df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl")
         elif ext == "pdf":
             df = extract_pdf_tables(file_content)
         else:

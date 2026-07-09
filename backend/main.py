@@ -331,12 +331,12 @@ def execute_nl_query(
         raise HTTPException(status_code=500, detail=generated_sql)
 
     # Validate SQL intent - check if SQL matches user intent
-    validation_result = validate_sql_intent(body.question, generated_sql, dataset.table_name, columns_info)
+    validation_result = validate_sql_intent(body.question, generated_sql, col_names)
 
     # Auto-regenerate if validation fails
     if not validation_result["valid"]:
         regenerated_sql = nl_to_sql(body.question, dataset.table_name, columns_info)
-        revalidation = validate_sql_intent(body.question, regenerated_sql, dataset.table_name, columns_info)
+        revalidation = validate_sql_intent(body.question, regenerated_sql, col_names)
         if revalidation["valid"]:
             generated_sql = regenerated_sql
             validation_result = revalidation
