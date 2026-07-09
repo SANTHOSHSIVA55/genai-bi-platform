@@ -417,13 +417,14 @@ def execute_nl_query(
     chart_config = detect_chart_type(body.question, columns, serialized_rows)
     chart_type = chart_config.get("chart_type", "table")
 
-    # Generate insights
-    insights = generate_insights(body.question, serialized_rows, columns)
+    # Generate insights (capability-aware)
+    insights = generate_insights(body.question, serialized_rows, columns, columns_info)
 
-    # Generate AI quality indicators with 8-step scoring
+    # Generate AI quality indicators with capability-aware confidence
     ai_quality = generate_ai_quality(
         body.question, safe_sql, chart_type, validation_result,
-        data_length=len(serialized_rows), sql_success=True
+        data_length=len(serialized_rows), sql_success=True,
+        columns_info=columns_info
     )
 
     # Build validation info for response

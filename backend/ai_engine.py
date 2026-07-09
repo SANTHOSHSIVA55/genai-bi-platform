@@ -79,6 +79,99 @@ def _get_column_type(col_name: str, dtype: str, nunique: int, total_rows: int) -
     return "text"
 
 
+def _get_dataset_capabilities(cols: list) -> dict:
+    """Map available columns to business analysis capabilities."""
+    col_names_lower = [c["name"].lower() for c in cols]
+    capabilities = {
+        "product_analysis": ["product", "item", "sku", "goods"],
+        "sales_analysis": ["sales", "quantity", "volume", "units_sold", "sold", "orders", "qty"],
+        "pricing_analysis": ["price", "cost", "unitprice", "unit_price", "rate", "fee"],
+        "supplier_analysis": ["supplier", "vendor", "manufacturer", "distributor"],
+        "customer_analysis": ["customer", "client", "buyer", "member"],
+        "inventory_analysis": ["inventory", "stock", "on_hand", "reorder", "warehouse"],
+        "financial_analysis": ["revenue", "profit", "margin", "income", "expense", "revenue"],
+        "trend_analysis": ["date", "time", "month", "year", "quarter", "day"],
+        "category_analysis": ["category", "type", "segment", "department", "group", "class"],
+        "performance_analysis": ["score", "rating", "rank", "grade", "performance", "kpi"],
+    }
+    result = {}
+    readable = []
+    for domain, keywords in capabilities.items():
+        found = any(any(kw in name for name in col_names_lower) for kw in keywords)
+        result[domain] = found
+        label = domain.replace("_", " ").title()
+        if found:
+            readable.append(label)
+    result["readable_available"] = readable
+    result["readable_unavailable"] = [
+        d.replace("_", " ").title()
+        for d, v in result.items()
+        if not v and d not in ("readable_available", "readable_unavailable")
+    ]
+    return result
+
+
+def _detect_business_intent(question: str) -> str:
+    """Detect the business domain from a natural language question."""
+    q = question.lower()
+    intent_map = {
+        "sales_analysis": [
+            "sales", "sell", "sold", "revenue", "quantity sold", "low sales",
+            "best selling", "top selling", "units sold", "buying", "purchase",
+        ],
+        "pricing_analysis": [
+            "price", "pricing", "cost", "expensive", "cheap", "affordable",
+            " cheapest", "most expensive", "price range",
+        ],
+        "supplier_analysis": ["supplier", "vendor", "supply", "distributor"],
+        "customer_analysis": ["customer", "client", "buyer", "member", "loyalty"],
+        "inventory_analysis": ["inventory", "stock", "warehouse", "reorder", "stockout"],
+        "financial_analysis": ["revenue", "profit", "margin", "financial", "income", "roi"],
+        "product_analysis": ["product", "item", "goods", "merchandise"],
+        "category_analysis": ["category", "segment", "department", "group", "classify"],
+        "performance_analysis": ["performance", "score", "rating", "rank", "kpi", "metric"],
+    }
+    for intent_type, keywords in intent_map.items():
+        if any(kw in q for kw in keywords):
+            return intent_type
+    return None
+
+
+def _validate_business_question(question: str, cols: list) -> dict:
+    """Check if the dataset can answer the business question asked."""
+    capabilities = _get_dataset_capabilities(cols)
+    business_intent = _detect_business_intent(question)
+    can_answer = True
+    missing_capability = None
+    if business_intent:
+        can_answer = capabilities.get(business_intent, False)
+        if not can_answer:
+            missing_capability = business_intent
+    return {
+        "capabilities": capabilities,
+        "business_intent": business_intent,
+        "can_answer": can_answer,
+        "missing_capability": missing_capability,
+    }
+
+
+def _get_missing_data_suggestion(missing_capability: str) -> str:
+    """Generate a helpful suggestion for missing data domains."""
+    suggestions = {
+        "sales_analysis": "sales transaction data (quantity, revenue, orders)",
+        "pricing_analysis": "pricing data (price, cost, rate)",
+        "supplier_analysis": "supplier information (supplier, vendor)",
+        "customer_analysis": "customer data (customer, client, demographics)",
+        "inventory_analysis": "inventory data (stock, quantity on hand, reorder level)",
+        "financial_analysis": "financial data (revenue, profit, margin)",
+        "trend_analysis": "date or time columns for trend analysis",
+        "product_analysis": "product information (product name, description, category)",
+        "category_analysis": "category or segment columns",
+        "performance_analysis": "performance metrics (score, rating, kpi)",
+    }
+    return suggestions.get(missing_capability, "additional business data relevant to your question")
+
+
 def _simple_stem(word: str) -> str:
     w = word.lower().strip()
     if w.endswith('ies') and len(w) > 4:
@@ -365,8 +458,21 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
     if intent["agg_col"] and intent["agg_col"] in id_cols and metric_cols:
         intent["agg_col"] = metric_cols[0]
 
+    # ------- CAPABILITY-AWARE BUSINESS VALIDATION -------
+    # Check if the question requires data the dataset doesn't have
+    biz_validation = _validate_business_question(question, cols)
+    business_intent_missing = biz_validation.get("missing_capability")
+
+    # For ranking and aggregation intents, if the required business data is missing,
+    # fall back to a general listing/overview rather than generating misleading SQL.
+    sales_intents = ["sales_analysis", "inventory_analysis", "financial_analysis", "performance_analysis"]
+    if business_intent_missing in sales_intents and intent.get("intent_type") in ("ranking", "aggregation", "comparison"):
+        intent["intent_type"] = "analysis"
+        intent["is_ranking"] = False
+        intent["is_aggregation"] = False
+        intent["is_comparison"] = False
+
     # COMPREHENSIVE ANALYSIS INTENT
-    if intent["intent_type"] == "analysis":
         select_parts = [f'COUNT(*) AS total_records']
         if cat_cols:
             select_parts.append(f'COUNT(DISTINCT "{cat_cols[0]}") AS unique_{cat_cols[0].replace(" ", "_")}')
@@ -664,7 +770,7 @@ def detect_chart_type(question: str, columns: list, data_sample: list) -> dict:
     }
 
 
-def generate_insights(question: str, data_sample: list, columns: list) -> dict:
+def generate_insights(question: str, data_sample: list, columns: list, columns_info: str = "") -> dict:
     num_rows = len(data_sample)
     num_cols = len(columns)
 
@@ -689,6 +795,15 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
             date_cols.append(col)
 
     q = question.lower()
+
+    # ----- BUSINESS CAPABILITY ANALYSIS -----
+    cols_meta = _parse_columns_info(columns_info) if columns_info else []
+    caps = _get_dataset_capabilities(cols_meta) if cols_meta else {}
+    biz_intent = _detect_business_intent(question)
+    missing_cap = None
+    if biz_intent and caps:
+        if not caps.get(biz_intent, False):
+            missing_cap = biz_intent
 
     # Detect intent type for smarter insights
     is_analysis = any(w in q for w in ["analyze", "analysis", "summary", "overview", "describe", "tell me about", "business review"])
@@ -750,10 +865,31 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
         for part in kpi_parts:
             summaries.append(part)
 
-        # Generate business narrative
-        if len(kpi_parts) >= 3:
-            summaries.append("The dataset shows healthy diversity across these dimensions.")
+        # -- Capability-aware business language --
+        available_domains = caps.get("readable_available", [])
+        if available_domains:
+            domain_text = ", ".join(available_domains[:4])
+            summaries.append(f"Dataset supports: {domain_text}.")
 
+        # If the question asked about something the dataset doesn't have
+        if missing_cap:
+            missing_suggestion = _get_missing_data_suggestion(missing_cap)
+            missing_label = missing_cap.replace("_", " ")
+            summaries.append(f"This dataset does not contain {missing_label} information. To perform this analysis, consider adding {missing_suggestion}.")
+            avail_alternatives = [d for d in available_domains if d.lower().replace(" ", "_") != missing_cap]
+            if avail_alternatives:
+                alt_text = ", ".join(avail_alternatives[:3])
+                summaries.append(f"However, you can still analyze: {alt_text}.")
+
+        # Business narrative on pricing analysis
+        if caps.get("pricing_analysis", False) and not missing_cap:
+            summaries.append("The data contains pricing information that can be analyzed for cost optimization and product positioning.")
+
+        # Business narrative on diversity
+        if len(kpi_parts) >= 3 and not missing_cap:
+            summaries.append("The dataset shows diversity across available dimensions.")
+
+        # Spread analysis
         if numeric_cols and len(numeric_cols) >= 2:
             avg_col = next((c for c in col_names if c.startswith("avg_")), None)
             max_col = next((c for c in col_names if c.startswith("max_")), None)
@@ -765,20 +901,27 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
                     if ratio < 0.3:
                         summaries.append("Significant spread exists between average and maximum values, indicating high-value outliers.")
 
-        # Recommendations
+        # Recommendations - Capability-aware
+        if missing_cap:
+            recommendations.append(f"Add {_get_missing_data_suggestion(missing_cap)} to enable comprehensive {missing_cap.replace('_', ' ')} analysis.")
         if cat_cols:
             recommendations.append(f"Break down metrics by '{cat_cols[0]}' to identify category-level trends.")
         if date_cols:
             recommendations.append("Analyze trends over time to identify seasonality and growth patterns.")
-        recommendations.append("Compare top-performing segments against average to identify best practices.")
+        else:
+            recommendations.append("Consider adding date/time columns to enable trend analysis.")
 
-        # Risks
+        # Risks - Capability-aware
         risk_count = next((int(row.get(c, 0)) for c in col_names if "total_records" in c.lower()), 0)
         if risk_count > 0 and risk_count < 50:
             risks.append(f"Small dataset ({risk_count} records) — insights may not be statistically significant.")
+        if missing_cap:
+            risks.append(f"Cannot evaluate {missing_cap.replace('_', ' ')} performance — required data is not available in this dataset.")
         risks.append("Summary statistics can mask important segment-level variations.")
 
-        # Follow-ups
+        # Follow-ups - Capability-aware
+        if missing_cap:
+            follow_ups.append(f"What data columns are available for analysis?")
         if cat_cols:
             follow_ups.append(f"Show distribution of key metrics by {cat_cols[0]}.")
         if numeric_cols:
@@ -962,9 +1105,16 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
 
 
 def generate_ai_quality(question: str, sql: str, chart_type: str, validation_result: dict,
-                        data_length: int, sql_success: bool = True) -> dict:
+                        data_length: int, sql_success: bool = True, columns_info: str = "") -> dict:
     q = question.lower().strip()
     issues = validation_result.get("issues", [])[:]
+
+    # ----- CAPABILITY-AWARE CONFIDENCE -----
+    cols_meta = _parse_columns_info(columns_info) if columns_info else []
+    biz_validation = _validate_business_question(question, cols_meta) if cols_meta else {}
+    business_intent = biz_validation.get("business_intent")
+    can_answer = biz_validation.get("can_answer", True)
+    missing_cap = biz_validation.get("missing_capability")
 
     # Step 1: Intent detected
     intent_detected = bool(
@@ -992,6 +1142,9 @@ def generate_ai_quality(question: str, sql: str, chart_type: str, validation_res
     # Step 8: SQL executed successfully
     sql_executed_successfully = sql_success
 
+    # Step 9: Dataset capability match (NEW)
+    capability_match = can_answer
+
     # Visualization quality
     visualization_quality = chart_type in ("kpi", "bar", "line", "pie", "area")
 
@@ -1005,11 +1158,21 @@ def generate_ai_quality(question: str, sql: str, chart_type: str, validation_res
         "recommendations_generated": int(recommendations_generated),
         "follow_up_generated": int(follow_up_generated),
         "sql_executed_successfully": int(sql_executed_successfully),
+        "capability_match": int(capability_match),
     }
 
     total_possible = len(steps)
     total_achieved = sum(steps.values())
     overall_score = round((total_achieved / total_possible) * 100, 1) if total_possible > 0 else 100.0
+
+    # Apply capability penalty: when a business intent was detected but dataset can't answer it,
+    # significantly reduce confidence to reflect the data reality.
+    if business_intent and not can_answer:
+        missing_label = missing_cap.replace("_", " ").title() if missing_cap else "Requested business domain"
+        issues.append(f"{missing_label} analysis cannot be fully performed — required data columns are not available in this dataset.")
+        # Cap penalty: at most ~55% even if everything else passes
+        overall_score = min(overall_score, 55.0)
+        overall_score = round(overall_score * 0.7, 1)  # further reduce by 30%
 
     return {
         "intent_detected": intent_detected,
@@ -1020,6 +1183,7 @@ def generate_ai_quality(question: str, sql: str, chart_type: str, validation_res
         "recommendations_generated": recommendations_generated,
         "follow_up_generated": follow_up_generated,
         "sql_executed_successfully": sql_executed_successfully,
+        "capability_match": capability_match,
         "visualization_quality": visualization_quality,
         "overall_score": overall_score,
         "step_scores": steps,
