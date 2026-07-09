@@ -76,104 +76,43 @@ const Dashboard = () => {
         setQueryHistory(Array.isArray(histRes.data) ? histRes.data : (histRes.data?.queries || []));
       }
     } catch (err) {
-      if (!err.response) {
-        const demoResult = {
-          data: [
-            { product: 'Widget A', revenue: 125000, units: 3200 },
-            { product: 'Widget B', revenue: 98000, units: 2800 },
-            { product: 'Widget C', revenue: 87000, units: 2100 },
-            { product: 'Widget D', revenue: 72000, units: 1900 },
-            { product: 'Widget E', revenue: 65000, units: 1700 },
-            { product: 'Widget F', revenue: 54000, units: 1400 },
-            { product: 'Widget G', revenue: 43000, units: 1100 },
-            { product: 'Widget H', revenue: 38000, units: 900 },
-          ],
-          chart_config: {
-            chart_type: 'bar',
-            x_axis: 'product',
-            y_axis: 'revenue',
-            title: `Results for: "${queryData.question}"`,
-          },
-          generated_sql: `SELECT product, revenue, units FROM sales ORDER BY revenue DESC LIMIT 8;`,
+      const detail = err.response?.data?.detail;
+      if (typeof detail === 'object' && detail?.error) {
+        setQueryResult({
+          question: detail.question || queryData.question,
+          generated_sql: detail.generated_sql || '',
+          data: [],
+          chart_config: { chart_type: 'table', x_axis: '', y_axis: '', title: 'Error' },
           summary: {
-            executive_summary: [
-              'Query returned 8 rows across 3 columns.',
-              'Widget A leads with $125,000 in revenue, 28% above the next closest product.',
-            ],
-            recommendations: [
-              'Analyze revenue by different product segments to identify patterns.',
-              'View supplier contact details for deeper analysis.',
-            ],
-            risks: [
-              'Small sample size (8 rows) may not be representative.',
-            ],
-            follow_up_questions: [
-              'What is the revenue by product?',
-              'Show me all records grouped by product.',
-              'What are the top 5 products by revenue?',
-            ],
+            executive_summary: ['An error occurred while processing your query.'],
+            recommendations: [],
+            risks: [],
+            follow_up_questions: [],
           },
           ai_quality: {
             intent_detected: true,
-            sql_generated: true,
-            sql_validated: true,
-            chart_selected_correctly: true,
-            summary_generated: true,
-            recommendations_generated: true,
-            follow_up_generated: true,
-            sql_executed_successfully: true,
-            visualization_quality: true,
-            overall_score: 100,
+            sql_generated: !!detail.generated_sql,
+            sql_validated: false,
+            chart_selected_correctly: false,
+            summary_generated: false,
+            recommendations_generated: false,
+            follow_up_generated: false,
+            sql_executed_successfully: false,
+            visualization_quality: false,
+            overall_score: 25.0,
             step_scores: {},
-            issues: [],
+            issues: [detail.error],
           },
           validation_info: {
-            valid: true,
-            issues: [],
-            suggested_fix: null,
+            valid: false,
+            issues: [detail.error],
+            suggested_fix: detail.suggested_fix || null,
           },
-        };
-        setQueryResult(demoResult);
-        toast.success('Demo results generated!');
+        });
+        toast.error(detail.error);
       } else {
-        const detail = err.response?.data?.detail;
-        if (typeof detail === 'object' && detail?.error) {
-          // Structured error from backend
-          setQueryResult({
-            question: detail.question || queryData.question,
-            generated_sql: detail.generated_sql || '',
-            data: [],
-            chart_config: { chart_type: 'table', x_axis: '', y_axis: '', title: 'Error' },
-            summary: {
-              executive_summary: ['An error occurred while processing your query.'],
-              recommendations: [],
-              risks: [],
-              follow_up_questions: [],
-            },
-            ai_quality: {
-              intent_detected: true,
-              sql_generated: true,
-              sql_validated: false,
-              chart_selected_correctly: false,
-              summary_generated: false,
-              recommendations_generated: false,
-              follow_up_generated: false,
-              sql_executed_successfully: false,
-              visualization_quality: false,
-              overall_score: 37.5,
-              step_scores: {},
-              issues: [detail.error],
-            },
-            validation_info: {
-              valid: false,
-              issues: [detail.error],
-              suggested_fix: detail.suggested_fix || null,
-            },
-          });
-          toast.error(detail.error);
-        } else {
-          toast.error(detail || 'Query failed');
-        }
+        setError(detail || 'Unable to connect to the server. Please ensure the backend is running.');
+        toast.error(detail || 'Connection failed');
       }
     } finally {
       setLoading(false);
