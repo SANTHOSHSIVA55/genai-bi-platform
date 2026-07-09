@@ -4,12 +4,62 @@ import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { BarChart3, TrendingUp, PieChart as PieIcon, AreaChart as AreaChartIcon, Table2, Target, ArrowUpDown } from 'lucide-react';
+import { BarChart3, TrendingUp, PieChart as PieIcon, AreaChart as AreaChartIcon, Table2, Target, ArrowUpDown, Database, Tag, Hash } from 'lucide-react';
 
 const COLORS = [
   '#ff3b30', '#ff6b6b', '#ff9500', '#ffcc00', '#34c759',
   '#5ac8fa', '#007aff', '#af52de', '#ff2d55', '#8e8e93',
 ];
+
+const isAnalysisResult = (data, chartType) => {
+  if (!data || data.length !== 1 || chartType !== 'kpi') return false;
+  const cols = Object.keys(data[0] || {});
+  const kpiCols = cols.filter(c => /total|avg_|min_|max_|count|sum|unique/.test(c));
+  return kpiCols.length >= 2;
+};
+
+const KPI_ICONS = {
+  total_records: Database,
+  unique: Tag,
+  avg: Hash,
+  min: Hash,
+  max: Hash,
+  total: Database,
+};
+
+const renderKpiGrid = (data, title) => {
+  if (!data || data.length === 0) return null;
+  const row = data[0];
+  const entries = Object.entries(row).filter(([_, v]) => v != null);
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-dark-400 mb-1">{title}</p>
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        {entries.map(([key, val]) => {
+          const iconKey = Object.keys(KPI_ICONS).find(k => key.toLowerCase().includes(k));
+          const Icon = iconKey ? KPI_ICONS[iconKey] : Hash;
+          const isNumeric = typeof val === 'number';
+          const displayVal = isNumeric
+            ? (Number.isInteger(val) ? val.toLocaleString() : Number(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+            : String(val);
+          const label = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+          return (
+            <div key={key} className="kpi-card p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] text-dark-400 uppercase tracking-wider truncate">{label}</span>
+                <div className="w-7 h-7 rounded-lg bg-primary-500/10 border border-primary-500/15 flex items-center justify-center">
+                  <Icon className="w-3.5 h-3.5 text-primary-400" />
+                </div>
+              </div>
+              <p className="text-xl sm:text-2xl font-bold text-white tracking-tight">{displayVal}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 const formatNumber = (val) => {
   if (val == null || val === '') return '\u2014';
@@ -50,7 +100,28 @@ const ChartDisplay = ({ data, chartConfig, intentType }) => {
 
   const isRanking = intentType === 'ranking' || columns.length === 2;
 
-  // KPI Card
+  // Multi-KPI analysis result grid
+  if (isAnalysisResult(safeData, chartType)) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+        className="glass-card p-6"
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-lg font-semibold text-dark-100 flex items-center gap-2">
+            <Target className="w-5 h-5 text-primary-400" />
+            {title}
+          </h3>
+          <span className="text-xs px-3 py-1 rounded-full bg-dark-700/50 text-dark-400 uppercase tracking-wider">Analysis</span>
+        </div>
+        {renderKpiGrid(safeData, chartConfig.description || '')}
+      </motion.div>
+    );
+  }
+
+  // KPI Card (single value)
   if (chartType === 'kpi') {
     const kpiValue = safeData[0]?.[xKey] ?? safeData[0]?.[yKey] ?? 0;
     const kpiLabel = chartConfig.title || 'Result';

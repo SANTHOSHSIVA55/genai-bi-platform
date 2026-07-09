@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles, Database, Clock, RefreshCw,
   AlertCircle, BarChart3, Loader2, CheckCircle2, XCircle,
-  FileWarning
+  FileWarning, ChevronDown, ChevronUp, Code, Brain,
+  Target, Hash, Tag
 } from 'lucide-react';
 import { getDatasets, getQueryHistory, executeQuery } from '../api/api';
 import { DashboardScene } from '../components/Scene3D';
@@ -15,8 +16,78 @@ import AIQualityBadge from '../components/AIQualityBadge';
 import ErrorPanel from '../components/ErrorPanel';
 import toast from 'react-hot-toast';
 
+const SQLExplanation = ({ sql }) => {
+  const [expanded, setExpanded] = useState(false);
+  const explainSQL = (sqlStr) => {
+    const upper = sqlStr.toUpperCase();
+    const steps = [];
+    if (upper.includes('SELECT')) steps.push('Selecting data from the table');
+    if (upper.includes('COUNT(')) steps.push('Counting total records');
+    if (upper.includes('AVG(')) steps.push('Calculating average values');
+    if (upper.includes('SUM(')) steps.push('Calculating total sums');
+    if (upper.includes('MIN(')) steps.push('Finding minimum values');
+    if (upper.includes('MAX(')) steps.push('Finding maximum values');
+    if (upper.includes('DISTINCT')) steps.push('Counting unique values only');
+    if (upper.includes('GROUP BY')) {
+      const match = sqlStr.match(/GROUP BY\s+"?(\w+)"?/i);
+      steps.push(`Grouping results by ${match ? match[1] : 'a category'}`);
+    }
+    if (upper.includes('ORDER BY')) {
+      const dir = upper.includes('DESC') ? 'descending' : 'ascending';
+      const match = sqlStr.match(/ORDER BY\s+"?(\w+)"?/i);
+      steps.push(`Sorting by ${match ? match[1] : 'a column'} (${dir})`);
+    }
+    if (upper.includes('LIMIT')) {
+      const match = sqlStr.match(/LIMIT\s+(\d+)/i);
+      if (match) steps.push(`Showing top ${match[1]} results`);
+    }
+    return steps.length > 0 ? steps : ['Executing query on your dataset'];
+  };
+
+  const explanation = explainSQL(sql);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.1 }}
+      className="glass-card overflow-hidden"
+    >
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between p-4 hover:bg-white/[0.02] transition-colors"
+      >
+        <div className="flex items-center gap-2.5">
+          <Code className="w-4 h-4 text-primary-400" />
+          <span className="text-sm font-medium text-dark-200">SQL Query</span>
+          <span className="text-[11px] px-2 py-0.5 rounded-full bg-dark-700/50 text-dark-400">
+            {explanation.length > 1 ? `${explanation.length} steps` : '1 step'}
+          </span>
+        </div>
+        {expanded ? <ChevronUp className="w-4 h-4 text-dark-400" /> : <ChevronDown className="w-4 h-4 text-dark-400" />}
+      </button>
+      {expanded && (
+        <div className="px-4 pb-4 space-y-3 border-t border-white/[0.04] pt-3">
+          <pre className="text-xs text-dark-300 bg-dark-800/50 rounded-lg p-3 overflow-x-auto font-mono leading-relaxed">{sql}</pre>
+          <div className="space-y-1.5">
+            {explanation.map((step, i) => (
+              <div key={i} className="flex items-center gap-2.5 text-sm text-dark-400">
+                <div className="w-5 h-5 rounded-full bg-primary-500/10 flex items-center justify-center flex-shrink-0">
+                  <span className="text-[10px] font-bold text-primary-400">{i + 1}</span>
+                </div>
+                <span>{step}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </motion.div>
+  );
+};
+
 const detectIntentType = (question) => {
   const q = (question || '').toLowerCase();
+  if (/analyze|analysis|summary|overview|describe|tell me about/.test(q)) return 'analysis';
   if (/compare|comparison|across/.test(q)) return 'comparison';
   if (/top\s+\d|bottom\s+\d|rank(?:ed)?|best|worst|highest|lowest/.test(q)) return 'ranking';
   if (/trend|over time|monthly|weekly|daily/.test(q)) return 'time_series';
@@ -190,15 +261,25 @@ const Dashboard = () => {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="glass-card p-8 flex flex-col items-center gap-4"
+                  className="glass-card p-8 flex flex-col items-center gap-5"
                 >
                   <div className="relative">
                     <div className="w-14 h-14 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
                     <Sparkles className="w-5 h-5 text-primary-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                   </div>
-                  <div className="text-center">
+                  <div className="text-center space-y-2">
                     <p className="text-dark-200 font-medium">AI is analyzing your data...</p>
-                    <p className="text-dark-500 text-xs mt-1">Generating insights and visualizations</p>
+                    <div className="flex flex-wrap items-center justify-center gap-3 text-[11px]">
+                      <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-dark-700/50 text-dark-400">
+                        <Brain className="w-3 h-3" /> Understanding question
+                      </span>
+                      <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-dark-700/50 text-dark-400">
+                        <Database className="w-3 h-3" /> Querying data
+                      </span>
+                      <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-dark-700/50 text-dark-400">
+                        <BarChart3 className="w-3 h-3" /> Building chart
+                      </span>
+                    </div>
                   </div>
                 </motion.div>
               )}
@@ -231,6 +312,12 @@ const Dashboard = () => {
                   chartConfig={queryResult.chart_config}
                   intentType={detectIntentType(queryResult.question)}
                 />
+
+                {/* SQL Explanation */}
+                {queryResult.generated_sql && (
+                  <SQLExplanation sql={queryResult.generated_sql} />
+                )}
+
                 <SummaryPanel
                   summary={queryResult.summary}
                   generatedSql={queryResult.generated_sql}
@@ -256,14 +343,25 @@ const Dashboard = () => {
                   <p className="text-dark-500 text-sm py-4 text-center">No datasets yet. Upload one to get started!</p>
                 ) : (
                   datasets.map((ds) => (
-                    <div key={ds.id} className="p-3 rounded-apple bg-dark-800/40 hover:bg-dark-800/60 transition-colors border border-white/[0.04]">
-                      <p className="text-dark-100 font-medium text-sm">{ds.name}</p>
-                      <p className="text-dark-500 text-xs mt-1">
-                        {(ds.row_count || 0).toLocaleString()} rows &middot; {ds.column_count || 0} cols
-                        <span className="ml-2 px-1.5 py-0.5 rounded bg-dark-700/50 text-dark-400 uppercase text-[10px]">
-                          {ds.file_type}
-                        </span>
-                      </p>
+                    <div key={ds.id} className="group p-3 rounded-apple bg-dark-800/40 hover:bg-dark-800/60 transition-colors border border-white/[0.04]">
+                      <div className="flex items-start justify-between">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-dark-100 font-medium text-sm truncate">{ds.name}</p>
+                          <p className="text-dark-500 text-xs mt-1">
+                            {(ds.row_count || 0).toLocaleString()} rows &middot; {ds.column_count || 0} cols
+                            <span className="ml-2 px-1.5 py-0.5 rounded bg-dark-700/50 text-dark-400 uppercase text-[10px]">
+                              {ds.file_type}
+                            </span>
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleQuery({ question: 'Analyze this dataset and give me a complete business summary', dataset_id: ds.id })}
+                          className="opacity-0 group-hover:opacity-100 transition-opacity ml-2 p-1.5 rounded-lg bg-primary-500/10 hover:bg-primary-500/20 border border-primary-500/20 flex-shrink-0"
+                          title="Run business analysis"
+                        >
+                          <Brain className="w-3.5 h-3.5 text-primary-400" />
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -328,6 +426,10 @@ const Dashboard = () => {
                 <li className="flex items-start gap-2">
                   <span className="text-apple-orange mt-0.5">&bull;</span>
                   Charts auto-generate based on data type
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-primary-400 mt-0.5">&bull;</span>
+                  Click <Brain className="w-3 h-3 inline text-primary-400" /> on a dataset for instant analysis
                 </li>
               </ul>
             </motion.div>

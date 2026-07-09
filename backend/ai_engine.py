@@ -53,6 +53,32 @@ def _parse_columns_info(columns_info: str) -> list:
         return []
 
 
+def _is_id_column(col_name: str, dtype: str = "", nunique: int = 0, total_rows: int = 0) -> bool:
+    low = col_name.lower().strip()
+    id_keywords = ["id", "code", "key", "sku", "uuid", "hash"]
+    if any(kw in low for kw in id_keywords):
+        return True
+    if dtype in ("int64", "int32") and total_rows > 0 and nunique == total_rows and nunique > 10:
+        return True
+    return False
+
+
+def _get_column_type(col_name: str, dtype: str, nunique: int, total_rows: int) -> str:
+    low = col_name.lower().strip()
+    if _is_id_column(col_name, dtype, nunique, total_rows):
+        return "id"
+    if "date" in low or "time" in low:
+        return "date"
+    if dtype in ("float64", "int64", "float32", "int32"):
+        return "metric"
+    if dtype == "object":
+        ratio = nunique / total_rows if total_rows > 0 else 1
+        if ratio < 0.3:
+            return "categorical"
+        return "text"
+    return "text"
+
+
 def _simple_stem(word: str) -> str:
     w = word.lower().strip()
     if w.endswith('ies') and len(w) > 4:
@@ -281,7 +307,19 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
         if intent["intent_type"] == "list":
             intent["intent_type"] = "time_series"
 
-    # 9. Correlation
+    # 9. ANALYSIS / SUMMARY / OVERVIEW — catch-all for comprehensive business review
+    analysis_keywords = [
+        "analyze", "analysis", "summary", "overview", "describe",
+        "tell me about", "business review", "business overview",
+        "report", "review", "dashboard", "profile", "breakdown"
+    ]
+    if intent["intent_type"] == "list":
+        for kw in analysis_keywords:
+            if kw in q:
+                intent["intent_type"] = "analysis"
+                break
+
+    # 10. Correlation
     if any(w in q for w in ["correlation", "relationship", "vs", "versus", "scatter"]):
         intent["is_correlation"] = True
         if intent["intent_type"] == "list":
@@ -297,12 +335,50 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
 def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
     cols = _parse_columns_info(columns_info)
     col_names = [c["name"] for c in cols]
-    numeric_cols = [c["name"] for c in cols if c.get("dtype") in ("int64", "float64", "int32", "float32")]
-    text_cols = [c["name"] for c in cols if c.get("dtype") == "object"]
+    total_rows_from_info = max((c.get("unique", 0) or 0) for c in cols) if cols else 0
+    numeric_cols_all = [c["name"] for c in cols if c.get("dtype") in ("int64", "float64", "int32", "float32")]
+    text_cols_all = [c["name"] for c in cols if c.get("dtype") == "object"]
     all_cols = ", ".join(f'"{c}"' for c in col_names)
 
-    intent = _detect_intent(question, col_names, numeric_cols, text_cols)
+    intent = _detect_intent(question, col_names, numeric_cols_all, text_cols_all)
+
     date_cols = [c["name"] for c in cols if "date" in c.get("dtype", "").lower() or "date" in c["name"].lower() or "time" in c["name"].lower()]
+
+    # ------- CLASSIFY COLUMNS (avoid ID columns in aggregations) -------
+    metric_cols = []
+    id_cols = []
+    cat_cols = []
+    for c in cols:
+        ctype = _get_column_type(c["name"], c.get("dtype", ""), c.get("unique", 0) or 0, total_rows_from_info)
+        if ctype == "id":
+            id_cols.append(c["name"])
+        elif ctype == "metric":
+            metric_cols.append(c["name"])
+        elif ctype == "categorical":
+            cat_cols.append(c["name"])
+
+    # Prefer real metrics for aggregations, not IDs
+    numeric_cols = metric_cols if metric_cols else [c for c in numeric_cols_all if c not in id_cols]
+    text_cols = cat_cols if cat_cols else text_cols_all
+
+    # Map intent agg_col away from IDs
+    if intent["agg_col"] and intent["agg_col"] in id_cols and metric_cols:
+        intent["agg_col"] = metric_cols[0]
+
+    # COMPREHENSIVE ANALYSIS INTENT
+    if intent["intent_type"] == "analysis":
+        select_parts = [f'COUNT(*) AS total_records']
+        if cat_cols:
+            select_parts.append(f'COUNT(DISTINCT "{cat_cols[0]}") AS unique_{cat_cols[0].replace(" ", "_")}')
+        for m in metric_cols[:3]:
+            select_parts.append(f'ROUND(AVG("{m}"), 2) AS avg_{m}')
+            select_parts.append(f'MIN("{m}") AS min_{m}')
+            select_parts.append(f'MAX("{m}") AS max_{m}')
+            select_parts.append(f'ROUND(SUM("{m}"), 2) AS total_{m}')
+        if not select_parts:
+            select_parts = [f'COUNT(*) AS total_records']
+        select_clause = ", ".join(select_parts)
+        return f'SELECT {select_clause} FROM "{table_name}"'
 
     # COUNT without GROUP BY
     if intent["is_count_query"] and not intent["group_col"]:
@@ -371,6 +447,13 @@ CRITICAL RULES:
 - Return ONLY the SQL query, nothing else. No markdown, no explanation.
 - Limit results to 1000 rows maximum.
 
+COLUMN CLASSIFICATION RULES (from metadata):
+- 'id' type columns (productid, customerid, code, key, sku) are IDENTIFIERS, NOT numeric metrics.
+- NEVER use SUM(), AVG(), MIN(), MAX() on ID columns — they are meaningless.
+- 'metric' type columns are real numeric values suitable for SUM, AVG, MIN, MAX.
+- 'categorical' type columns are labels for GROUP BY operations.
+- 'date' type columns should be used for time-series analysis.
+
 INTENT RULES - FOLLOW STRICTLY:
 - "How many X are there?", "Total X", "Number of X", "Count X" -> SELECT COUNT(*) or SELECT COUNT(DISTINCT col) NEVER use GROUP BY for these.
 - Only use GROUP BY when user explicitly asks "by country", "by city", "for each category", "per X", "distribution by X".
@@ -379,6 +462,7 @@ INTENT RULES - FOLLOW STRICTLY:
 - "Compare X across Y", "X comparison by Y" -> SELECT Y, SUM(X) ... GROUP BY Y ORDER BY SUM(X) DESC
 - "Top N X by Y" -> SELECT X, Y ... ORDER BY Y DESC LIMIT N
 - "Rank X by Y" -> SELECT X, Y ... ORDER BY Y DESC
+- "Analyze", "Summary", "Overview", "Describe" -> SELECT COUNT(*), AVG(metrics), MIN(metrics), MAX(metrics) in a single row
 """
         result = _chat(system_prompt, question)
         if result and not result.startswith("AI_ERROR"):
@@ -436,6 +520,15 @@ def validate_sql_intent(question: str, sql: str, table_name: str, columns_info: 
             selected = select_match.group(1)
             if "," in selected and "COUNT" in selected:
                 issues.append("Query selects multiple columns for a count question. Use only COUNT.")
+
+    # 5. Check for ID column in aggregation functions (SUM/AVG on productid, etc.)
+    for c in cols:
+        cname = c["name"]
+        col_type = c.get("type", "")
+        is_id = (col_type == "id") or _is_id_column(cname, c.get("dtype", ""), c.get("unique", 0) or 0, len(cols))
+        if is_id:
+            if re.search(rf'(SUM|AVG|MIN|MAX)\s*\(\s*"?{re.escape(cname)}"?\s*\)', sql, re.IGNORECASE):
+                issues.append(f"Aggregation on ID column '{cname}' is not meaningful. Use a metric column instead.")
 
     valid = len(issues) == 0
     suggested_fix = None
@@ -598,6 +691,7 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
     q = question.lower()
 
     # Detect intent type for smarter insights
+    is_analysis = any(w in q for w in ["analyze", "analysis", "summary", "overview", "describe", "tell me about", "business review"])
     is_comparison = "comparison" in q or "compare" in q or "across" in q
     is_ranking = any(w in q for w in ["top ", "bottom ", "rank", "best", "worst"])
     is_count = any(w in q for w in ["how many", "total", "number of", "count"])
@@ -621,6 +715,83 @@ def generate_insights(question: str, data_sample: list, columns: list) -> dict:
                 "risks": risks[:2],
                 "follow_up_questions": follow_ups[:3],
             }
+
+    # Comprehensive analysis / business summary (single-row multi-column KPI result)
+    if is_analysis and num_rows == 1:
+        row = data_sample[0]
+        kpi_parts = []
+        for col in col_names:
+            low = col.lower()
+            val = row.get(col)
+            if val is None:
+                continue
+            if "total_records" in low or "count" in low:
+                kpi_parts.append(f"Total records: {int(val):,}")
+            elif "unique" in low or "distinct" in low:
+                dim_name = col.replace("unique_", "").replace("_", " ")
+                kpi_parts.append(f"Unique {dim_name}: {int(val):,}")
+            elif low.startswith("avg_"):
+                dim_name = col[4:].replace("_", " ")
+                kpi_parts.append(f"Average {dim_name}: {val:,.2f}")
+            elif low.startswith("min_"):
+                dim_name = col[4:].replace("_", " ")
+                kpi_parts.append(f"Min {dim_name}: {val:,.2f}")
+            elif low.startswith("max_"):
+                dim_name = col[4:].replace("_", " ")
+                kpi_parts.append(f"Max {dim_name}: {val:,.2f}")
+            elif low.startswith("total_"):
+                dim_name = col[6:].replace("_", " ")
+                kpi_parts.append(f"Total {dim_name}: {val:,.2f}")
+            elif isinstance(val, (int, float)):
+                kpi_parts.append(f"{col}: {val:,.2f}")
+            else:
+                kpi_parts.append(f"{col}: {val}")
+
+        for part in kpi_parts:
+            summaries.append(part)
+
+        # Generate business narrative
+        if len(kpi_parts) >= 3:
+            summaries.append("The dataset shows healthy diversity across these dimensions.")
+
+        if numeric_cols and len(numeric_cols) >= 2:
+            avg_col = next((c for c in col_names if c.startswith("avg_")), None)
+            max_col = next((c for c in col_names if c.startswith("max_")), None)
+            if avg_col and max_col:
+                avg_val = row.get(avg_col, 0) or 0
+                max_val = row.get(max_col, 0) or 0
+                if max_val > 0:
+                    ratio = avg_val / max_val if max_val else 0
+                    if ratio < 0.3:
+                        summaries.append("Significant spread exists between average and maximum values, indicating high-value outliers.")
+
+        # Recommendations
+        if cat_cols:
+            recommendations.append(f"Break down metrics by '{cat_cols[0]}' to identify category-level trends.")
+        if date_cols:
+            recommendations.append("Analyze trends over time to identify seasonality and growth patterns.")
+        recommendations.append("Compare top-performing segments against average to identify best practices.")
+
+        # Risks
+        risk_count = next((int(row.get(c, 0)) for c in col_names if "total_records" in c.lower()), 0)
+        if risk_count > 0 and risk_count < 50:
+            risks.append(f"Small dataset ({risk_count} records) — insights may not be statistically significant.")
+        risks.append("Summary statistics can mask important segment-level variations.")
+
+        # Follow-ups
+        if cat_cols:
+            follow_ups.append(f"Show distribution of key metrics by {cat_cols[0]}.")
+        if numeric_cols:
+            follow_ups.append(f"What are the top 10 records by {numeric_cols[0]}?")
+        if date_cols:
+            follow_ups.append(f"Show trend of {numeric_cols[0] if numeric_cols else 'metrics'} over time.")
+
+        return {
+            "executive_summary": summaries[:8],
+            "recommendations": recommendations[:3],
+            "risks": risks[:2],
+            "follow_up_questions": follow_ups[:3],
+        }
 
     # Comparison insights (e.g., "profit comparison across regions")
     if is_comparison and len(text_cols) >= 1 and len(numeric_cols) >= 1:

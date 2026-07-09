@@ -22,9 +22,9 @@ from auth import (
     hash_password, verify_password, create_access_token,
     get_current_user, require_admin,
 )
-from data_cleaner import read_uploaded_file, clean_dataframe, get_column_info
-from sql_validator import validate_sql, validate_sql_intent, sanitize_column_name
-from ai_engine import nl_to_sql, _local_nl_to_sql, detect_chart_type, generate_insights, generate_ai_quality
+from data_cleaner import read_uploaded_file, clean_dataframe, get_column_info, analyze_dataset
+from sql_validator import validate_sql, sanitize_column_name
+from ai_engine import nl_to_sql, _local_nl_to_sql, detect_chart_type, generate_insights, generate_ai_quality, validate_sql_intent
 
 load_dotenv()
 
@@ -331,12 +331,12 @@ def execute_nl_query(
         raise HTTPException(status_code=500, detail=generated_sql)
 
     # Validate SQL intent - check if SQL matches user intent
-    validation_result = validate_sql_intent(body.question, generated_sql, col_names)
+    validation_result = validate_sql_intent(body.question, generated_sql, dataset.table_name, columns_info)
 
     # Auto-regenerate if validation fails
     if not validation_result["valid"]:
         regenerated_sql = nl_to_sql(body.question, dataset.table_name, columns_info)
-        revalidation = validate_sql_intent(body.question, regenerated_sql, col_names)
+        revalidation = validate_sql_intent(body.question, regenerated_sql, dataset.table_name, columns_info)
         if revalidation["valid"]:
             generated_sql = regenerated_sql
             validation_result = revalidation

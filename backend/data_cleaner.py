@@ -145,20 +145,67 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def get_column_info(df: pd.DataFrame) -> str:
-    """Generate column metadata as JSON string."""
-    info = []
+def classify_column(col_name: str, dtype, nunique: int, total_rows: int, sample_values) -> str:
+    """Classify a column as id, metric, categorical, date, or text."""
+    low = col_name.lower().strip()
+    id_keywords = ["id", "code", "key", "sku", "uuid", "hash"]
+    if any(kw in low for kw in id_keywords):
+        return "id"
+    if "date" in low or "time" in low or dtype == "datetime64[ns]":
+        return "date"
+    if dtype in ("float64", "int64"):
+        if nunique == total_rows and nunique > 10:
+            return "id"
+        return "metric"
+    if dtype == "object" or dtype == "string":
+        ratio = nunique / total_rows if total_rows > 0 else 1
+        if ratio < 0.3:
+            return "categorical"
+        return "text"
+    return "text"
+
+
+def analyze_dataset(df: pd.DataFrame) -> dict:
+    """Extract business metadata and column classification from a DataFrame."""
+    total_rows = len(df)
+    analysis = {
+        "total_rows": total_rows,
+        "total_columns": len(df.columns),
+        "columns": [],
+        "id_columns": [],
+        "metric_columns": [],
+        "categorical_columns": [],
+        "date_columns": [],
+        "text_columns": [],
+    }
     for col in df.columns:
-        col_info = {
+        nunique = int(df[col].nunique())
+        dtype = str(df[col].dtype)
+        col_type = classify_column(col, df[col].dtype, nunique, total_rows, df[col].dropna().head(3).tolist())
+        entry = {
             "name": col,
-            "dtype": str(df[col].dtype),
+            "dtype": dtype,
+            "type": col_type,
             "non_null": int(df[col].notna().sum()),
-            "unique": int(df[col].nunique()),
+            "unique": nunique,
             "sample_values": df[col].dropna().head(3).tolist(),
         }
-        if df[col].dtype in ("float64", "int64"):
-            col_info["min"] = float(df[col].min()) if not df[col].empty else None
-            col_info["max"] = float(df[col].max()) if not df[col].empty else None
-            col_info["mean"] = float(df[col].mean()) if not df[col].empty else None
-        info.append(col_info)
-    return json.dumps(info)
+        if dtype in ("float64", "int64") and not df[col].empty:
+            entry["min"] = float(df[col].min())
+            entry["max"] = float(df[col].max())
+            entry["mean"] = float(df[col].mean())
+            if col_type == "metric":
+                entry["sum"] = float(df[col].sum())
+                entry["std"] = float(df[col].std())
+        if col_type == "categorical":
+            value_counts = df[col].value_counts().head(10)
+            entry["top_values"] = {str(k): int(v) for k, v in value_counts.items()}
+        analysis["columns"].append(entry)
+        analysis[f"{col_type}_columns"].append(col)
+    return analysis
+
+
+def get_column_info(df: pd.DataFrame) -> str:
+    """Generate column metadata as JSON string."""
+    analysis = analyze_dataset(df)
+    return json.dumps(analysis["columns"])

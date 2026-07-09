@@ -64,6 +64,7 @@ class NLQueryRequest(BaseModel):
 class ValidationInfo(BaseModel):
     valid: bool
     issues: List[str] = []
+    suggested_fix: Optional[str] = None
 
 
 class AIQuality(BaseModel):
