@@ -49,7 +49,7 @@ A modern, interactive, and fully responsive Business Intelligence (BI) platform 
 genai-bi-platform/
 ├── backend/                  # FastAPI Backend
 │   ├── main.py               # Main application entry point & API endpoints
-│   ├── ai_engine.py          # NL -> SQL translation logic (OpenAI & Fallback)
+│   ├── ai_engine.py          # NL -> SQL translation logic (NVIDIA NIM & Fallback)
 │   ├── database.py           # SQLAlchemy setup and DB session helpers
 │   ├── models.py             # Database schemas & ORM models
 │   ├── schemas.py            # Pydantic schemas for data validation
@@ -102,7 +102,7 @@ genai-bi-platform/
    ```env
    DATABASE_URL=sqlite:///genai_bi.db
    SECRET_KEY=your_jwt_secret_key_here
-   OPENAI_API_KEY=your_openai_api_key_here   # Optional: For advanced GPT-based NL-to-SQL
+   NVIDIA_API_KEY=nvapi-your-nvidia-nim-api-key   # Optional: For advanced NL-to-SQL via NVIDIA NIM
    ```
 5. Start the FastAPI development server:
    ```bash

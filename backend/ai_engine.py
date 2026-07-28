@@ -7,25 +7,27 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-USE_AI = bool(OPENAI_API_KEY and len(OPENAI_API_KEY.strip()) > 10)
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
+USE_AI = bool(NVIDIA_API_KEY and len(NVIDIA_API_KEY.strip()) > 10)
 
 client = None
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4")
+MODEL = os.getenv("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-flash")
 
 if USE_AI:
     try:
+        import httpx
         from openai import OpenAI
         client = OpenAI(
-            api_key=OPENAI_API_KEY,
-            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            api_key=NVIDIA_API_KEY,
+            base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+            timeout=httpx.Timeout(120.0, connect=15.0),
         )
-        print("[AI] OpenAI API connected")
+        print("[AI] NVIDIA NIM API connected")
     except ImportError:
-        print("[AI] OpenAI package not installed, using local fallback")
+        print("[AI] OpenAI package not installed (required for NVIDIA NIM), using local fallback")
         USE_AI = False
 else:
-    print("[AI] No OpenAI API key set, using smart local fallback for NL -> SQL")
+    print("[AI] No NVIDIA API key set, using smart local fallback for NL -> SQL")
 
 
 def _chat(system: str, user: str, temperature: float = 0.2) -> str:
