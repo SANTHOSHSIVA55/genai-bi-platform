@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles, Database, Clock, RefreshCw,
-  AlertCircle, BarChart3, Loader2, CheckCircle2, XCircle,
-  FileWarning, ChevronDown, ChevronUp, Code, Brain,
-  Target, Hash, Tag
+  AlertCircle, BarChart3, Loader2, Eye,
+  ChevronDown, ChevronUp, Code, Brain,
+  Download, FileJson, Table2
 } from 'lucide-react';
 import { getDatasets, getQueryHistory, executeQuery } from '../api/api';
 import { DashboardScene } from '../components/Scene3D';
@@ -14,6 +15,8 @@ import ChartDisplay from '../components/ChartDisplay';
 import SummaryPanel from '../components/SummaryPanel';
 import AIQualityBadge from '../components/AIQualityBadge';
 import ErrorPanel from '../components/ErrorPanel';
+import DatasetPreviewModal from '../components/DatasetPreviewModal';
+import { exportCsv, downloadJson } from '../utils/export';
 import toast from 'react-hot-toast';
 
 const SQLExplanation = ({ sql }) => {
@@ -98,34 +101,45 @@ const detectIntentType = (question) => {
 };
 
 const Dashboard = () => {
+  const location = useLocation();
   const [datasets, setDatasets] = useState([]);
   const [queryHistory, setQueryHistory] = useState([]);
   const [queryResult, setQueryResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [previewTarget, setPreviewTarget] = useState(null);
+  const [prefill, setPrefill] = useState(null);
+  const lastDatasetId = useRef(null);
+
+  useEffect(() => {
+    const state = location.state;
+    if (state?.question) {
+      setPrefill({ question: state.question, datasetId: state.datasetId || null });
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
 
   const fetchData = useCallback(async () => {
     try {
       const [dsRes, histRes] = await Promise.all([
-        getDatasets().catch(() => ({ data: [] })),
-        getQueryHistory().catch(() => ({ data: [] })),
+        getDatasets(),
+        getQueryHistory(),
       ]);
-      setDatasets(Array.isArray(dsRes.data) ? dsRes.data : (dsRes.data?.datasets || []));
-      setQueryHistory(Array.isArray(histRes.data) ? histRes.data : (histRes.data?.queries || []));
+      const ds = Array.isArray(dsRes.data) ? dsRes.data : (dsRes.data?.datasets || []);
+      const hist = Array.isArray(histRes.data) ? histRes.data : (histRes.data?.queries || []);
+      setDatasets(ds);
+      setQueryHistory(hist);
       setError(null);
+      if (ds.length > 0 && !lastDatasetId.current) {
+        lastDatasetId.current = ds[0].id;
+      }
     } catch (err) {
       console.warn('Could not fetch initial data:', err);
-      setError('Unable to connect to server. Using demo mode.');
-      setDatasets([
-        { id: '1', name: 'Sales Data 2024', row_count: 15420, column_count: 12, file_type: 'csv' },
-        { id: '2', name: 'Customer Analytics', row_count: 8930, column_count: 8, file_type: 'xlsx' },
-        { id: '3', name: 'Product Inventory', row_count: 3200, column_count: 6, file_type: 'csv' },
-      ]);
-      setQueryHistory([
-        { id: '1', question: 'Show top 10 products by revenue', created_at: new Date().toISOString() },
-        { id: '2', question: 'Average sales per region', created_at: new Date().toISOString() },
-      ]);
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'Unable to connect to the server.');
+      setDatasets([]);
+      setQueryHistory([]);
     } finally {
       setInitialLoading(false);
     }
@@ -138,6 +152,8 @@ const Dashboard = () => {
   const handleQuery = async (queryData) => {
     setLoading(true);
     setQueryResult(null);
+    setError(null);
+    lastDatasetId.current = queryData.dataset_id || lastDatasetId.current;
     try {
       const res = await executeQuery(queryData);
       setQueryResult(res.data);
@@ -148,32 +164,20 @@ const Dashboard = () => {
       }
     } catch (err) {
       const detail = err.response?.data?.detail;
-      if (typeof detail === 'object' && detail?.error) {
+      if (detail && typeof detail === 'object' && detail?.error) {
         setQueryResult({
           question: detail.question || queryData.question,
           generated_sql: detail.generated_sql || '',
           data: [],
-          chart_config: { chart_type: 'table', x_axis: '', y_axis: '', title: 'Error' },
+          chart_type: 'table',
+          chart_config: { chart_type: 'table', x_axis: '', y_axis: '', title: 'Query Error' },
           summary: {
-            executive_summary: ['An error occurred while processing your query.'],
+            executive_summary: [],
             recommendations: [],
             risks: [],
             follow_up_questions: [],
           },
-          ai_quality: {
-            intent_detected: true,
-            sql_generated: !!detail.generated_sql,
-            sql_validated: false,
-            chart_selected_correctly: false,
-            summary_generated: false,
-            recommendations_generated: false,
-            follow_up_generated: false,
-            sql_executed_successfully: false,
-            visualization_quality: false,
-            overall_score: 25.0,
-            step_scores: {},
-            issues: [detail.error],
-          },
+          ai_quality: null,
           validation_info: {
             valid: false,
             issues: [detail.error],
@@ -182,17 +186,31 @@ const Dashboard = () => {
         });
         toast.error(detail.error);
       } else {
-        setError(detail || 'Unable to connect to the server. Please ensure the backend is running.');
-        toast.error(detail || 'Connection failed');
+        const msg = typeof detail === 'string' ? detail : 'Unable to connect to the server. Please ensure the backend is running.';
+        setError(msg);
+        toast.error(msg);
       }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleFollowUp = (question) => {
-    if (datasets.length > 0) {
-      handleQuery({ question, dataset_id: datasets[0].id });
+  const handleFollowUp = (question, datasetId) => {
+    const id = datasetId || lastDatasetId.current || (datasets.length > 0 ? datasets[0].id : null);
+    if (id) {
+      handleQuery({ question, dataset_id: id });
+    }
+  };
+
+  const handleExportCsv = () => {
+    if (queryResult?.data?.length) {
+      exportCsv(queryResult.data, `${queryResult.question.slice(0, 40).replace(/[^\w\s-]/g, '').trim() || 'query'}-results.csv`);
+    }
+  };
+
+  const handleExportJson = () => {
+    if (queryResult?.data?.length) {
+      downloadJson(queryResult.data, 'query-results.json');
     }
   };
 
@@ -249,11 +267,37 @@ const Dashboard = () => {
           )}
         </AnimatePresence>
 
+        {!error && datasets.length === 0 && !loading && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="glass-card p-8 text-center"
+          >
+            <div className="w-14 h-14 rounded-2xl bg-dark-800/60 flex items-center justify-center mx-auto mb-4 border border-white/[0.04]">
+              <Database className="w-7 h-7 text-dark-500" />
+            </div>
+            <h3 className="text-dark-100 font-semibold mb-1">No datasets yet</h3>
+            <p className="text-dark-400 text-sm mb-5">
+              Upload your first dataset to start asking questions in plain English.
+            </p>
+            <Link to="/upload" className="btn-primary inline-flex items-center gap-2 text-sm">
+              <Table2 className="w-4 h-4" />
+              Upload a Dataset
+            </Link>
+          </motion.div>
+        )}
+
         <KPICards datasets={datasets} queryCount={queryHistory.length} />
 
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
-            <QueryInput datasets={datasets} onSubmit={handleQuery} loading={loading} />
+            <QueryInput
+              datasets={datasets}
+              onSubmit={handleQuery}
+              loading={loading}
+              initialQuestion={prefill?.question || ''}
+              initialDatasetId={prefill?.datasetId}
+            />
 
             <AnimatePresence>
               {loading && (
@@ -287,24 +331,39 @@ const Dashboard = () => {
 
             {queryResult && (
               <>
-                {/* AI Quality Indicators */}
                 {queryResult.ai_quality && (
                   <AIQualityBadge quality={queryResult.ai_quality} />
                 )}
 
-                {/* Validation Issues */}
                 {queryResult.validation_info && !queryResult.validation_info.valid && (
                   <ErrorPanel
                     question={queryResult.question}
                     generatedSql={queryResult.generated_sql}
                     issues={queryResult.validation_info.issues}
                     onRegenerate={() => {
-                      if (datasets.length > 0) {
-                        handleQuery({ question: queryResult.question, dataset_id: datasets[0].id });
+                      if (lastDatasetId.current) {
+                        handleQuery({ question: queryResult.question, dataset_id: lastDatasetId.current });
                       }
                     }}
                     suggestedFix={queryResult.validation_info.suggested_fix}
                   />
+                )}
+
+                {queryResult.data && queryResult.data.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex items-center justify-end gap-2"
+                  >
+                    <button onClick={handleExportCsv} className="btn-secondary text-xs flex items-center gap-1.5">
+                      <Download className="w-3.5 h-3.5" />
+                      Export CSV
+                    </button>
+                    <button onClick={handleExportJson} className="btn-secondary text-xs flex items-center gap-1.5">
+                      <FileJson className="w-3.5 h-3.5" />
+                      JSON
+                    </button>
+                  </motion.div>
                 )}
 
                 <ChartDisplay
@@ -313,7 +372,6 @@ const Dashboard = () => {
                   intentType={detectIntentType(queryResult.question)}
                 />
 
-                {/* SQL Explanation */}
                 {queryResult.generated_sql && (
                   <SQLExplanation sql={queryResult.generated_sql} />
                 )}
@@ -321,7 +379,7 @@ const Dashboard = () => {
                 <SummaryPanel
                   summary={queryResult.summary}
                   generatedSql={queryResult.generated_sql}
-                  onFollowUp={handleFollowUp}
+                  onFollowUp={(q) => handleFollowUp(q)}
                 />
               </>
             )}
@@ -346,21 +404,39 @@ const Dashboard = () => {
                     <div key={ds.id} className="group p-3 rounded-apple bg-dark-800/40 hover:bg-dark-800/60 transition-colors border border-white/[0.04]">
                       <div className="flex items-start justify-between">
                         <div className="min-w-0 flex-1">
-                          <p className="text-dark-100 font-medium text-sm truncate">{ds.name}</p>
-                          <p className="text-dark-500 text-xs mt-1">
-                            {(ds.row_count || 0).toLocaleString()} rows &middot; {ds.column_count || 0} cols
-                            <span className="ml-2 px-1.5 py-0.5 rounded bg-dark-700/50 text-dark-400 uppercase text-[10px]">
-                              {ds.file_type}
-                            </span>
-                          </p>
+                          <button
+                            onClick={() => setPreviewTarget(ds)}
+                            className="text-left w-full"
+                          >
+                            <p className="text-dark-100 font-medium text-sm truncate group-hover:text-primary-400 transition-colors">
+                              {ds.name}
+                            </p>
+                            <p className="text-dark-500 text-xs mt-1">
+                              {(ds.row_count || 0).toLocaleString()} rows &middot; {ds.column_count || 0} cols
+                              <span className="ml-2 px-1.5 py-0.5 rounded bg-dark-700/50 text-dark-400 uppercase text-[10px]">
+                                {ds.file_type}
+                              </span>
+                            </p>
+                          </button>
                         </div>
-                        <button
-                          onClick={() => handleQuery({ question: 'Analyze this dataset and give me a complete business summary', dataset_id: ds.id })}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity ml-2 p-1.5 rounded-lg bg-primary-500/10 hover:bg-primary-500/20 border border-primary-500/20 flex-shrink-0"
-                          title="Run business analysis"
-                        >
-                          <Brain className="w-3.5 h-3.5 text-primary-400" />
-                        </button>
+                        <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+                          <button
+                            onClick={() => setPreviewTarget(ds)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-dark-700/40 hover:bg-dark-700/70 border border-white/[0.05]"
+                            title="Preview data"
+                            aria-label={`Preview ${ds.name}`}
+                          >
+                            <Eye className="w-3.5 h-3.5 text-dark-300" />
+                          </button>
+                          <button
+                            onClick={() => handleQuery({ question: 'Analyze this dataset and give me a complete business summary', dataset_id: ds.id })}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-primary-500/10 hover:bg-primary-500/20 border border-primary-500/20"
+                            title="Run business analysis"
+                            aria-label={`Analyze ${ds.name}`}
+                          >
+                            <Brain className="w-3.5 h-3.5 text-primary-400" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))
@@ -385,7 +461,7 @@ const Dashboard = () => {
                   queryHistory.slice(0, 5).map((q) => (
                     <button
                       key={q.id}
-                      onClick={() => handleFollowUp(q.question)}
+                      onClick={() => handleFollowUp(q.question, q.dataset_id)}
                       className="w-full text-left p-3 rounded-apple bg-dark-800/40 hover:bg-dark-800/60 transition-colors border border-white/[0.04] group"
                     >
                       <p className="text-dark-200 text-sm group-hover:text-primary-400 transition-colors truncate">
@@ -436,6 +512,13 @@ const Dashboard = () => {
           </div>
         </div>
       </div>
+
+      <DatasetPreviewModal
+        datasetId={previewTarget?.id}
+        datasetName={previewTarget?.name}
+        open={!!previewTarget}
+        onClose={() => setPreviewTarget(null)}
+      />
     </div>
   );
 };

@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   History, Search, Clock, MessageSquare, Database,
   ChevronDown, ChevronUp, Loader2, Code2, ArrowRight,
-  Calendar, Filter
+  Calendar, Filter, AlertCircle
 } from 'lucide-react';
 import { getQueryHistory } from '../api/api';
-import toast from 'react-hot-toast';
 
 const HistoryPage = () => {
+  const navigate = useNavigate();
   const [queries, setQueries] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState(null);
   const [sortOrder, setSortOrder] = useState('desc');
@@ -20,55 +22,12 @@ const HistoryPage = () => {
       const res = await getQueryHistory();
       const data = Array.isArray(res.data) ? res.data : (res.data?.queries || []);
       setQueries(data);
+      setFetchError(null);
     } catch (err) {
       console.warn('Could not fetch history:', err);
-      setQueries([
-        {
-          id: '1',
-          question: 'Show me the top 10 products by total revenue',
-          dataset_name: 'Sales Data 2024',
-          created_at: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-          generated_sql: 'SELECT product_name, SUM(revenue) as total_revenue FROM sales GROUP BY product_name ORDER BY total_revenue DESC LIMIT 10;',
-          chart_type: 'bar',
-          row_count: 10,
-        },
-        {
-          id: '2',
-          question: 'What is the average order value per region?',
-          dataset_name: 'Customer Analytics',
-          created_at: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-          generated_sql: 'SELECT region, AVG(order_value) as avg_order_value FROM customers GROUP BY region ORDER BY avg_order_value DESC;',
-          chart_type: 'bar',
-          row_count: 5,
-        },
-        {
-          id: '3',
-          question: 'Show monthly sales trend for the last 12 months',
-          dataset_name: 'Sales Data 2024',
-          created_at: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
-          generated_sql: "SELECT DATE_TRUNC('month', sale_date) as month, SUM(revenue) as total FROM sales WHERE sale_date >= NOW() - INTERVAL '12 months' GROUP BY month ORDER BY month;",
-          chart_type: 'line',
-          row_count: 12,
-        },
-        {
-          id: '4',
-          question: 'What percentage of revenue comes from each category?',
-          dataset_name: 'Product Inventory',
-          created_at: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-          generated_sql: 'SELECT category, SUM(revenue) as total, ROUND(SUM(revenue) * 100.0 / (SELECT SUM(revenue) FROM products), 1) as pct FROM products GROUP BY category ORDER BY total DESC;',
-          chart_type: 'pie',
-          row_count: 8,
-        },
-        {
-          id: '5',
-          question: 'List the bottom 5 performing SKUs',
-          dataset_name: 'Product Inventory',
-          created_at: new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString(),
-          generated_sql: 'SELECT sku, product_name, units_sold, revenue FROM products ORDER BY revenue ASC LIMIT 5;',
-          chart_type: 'table',
-          row_count: 5,
-        },
-      ]);
+      const detail = err.response?.data?.detail;
+      setFetchError(typeof detail === 'string' ? detail : 'Unable to connect to the server.');
+      setQueries([]);
     } finally {
       setLoading(false);
     }
@@ -110,6 +69,12 @@ const HistoryPage = () => {
     return styles[type] || styles.table;
   };
 
+  const handleRerun = (q) => {
+    navigate('/dashboard', {
+      state: { question: q.question, datasetId: q.dataset_id || undefined },
+    });
+  };
+
   return (
     <div className="space-y-6">
       <motion.div
@@ -129,6 +94,20 @@ const HistoryPage = () => {
           {filtered.length} queries total
         </div>
       </motion.div>
+
+      <AnimatePresence>
+        {fetchError && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="flex items-center gap-3 p-4 rounded-apple-lg bg-amber-500/8 border border-amber-500/15 text-amber-300"
+          >
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <p className="text-sm">{fetchError}</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -243,7 +222,11 @@ const HistoryPage = () => {
                           </div>
                         )}
                         <div className="flex gap-3 mt-3">
-                          <button className="btn-primary text-xs flex items-center gap-2">
+                          <button
+                            onClick={() => handleRerun(q)}
+                            disabled={!q.dataset_id}
+                            className="btn-primary text-xs flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
                             Re-run Query
                             <ArrowRight className="w-3.5 h-3.5" />
                           </button>

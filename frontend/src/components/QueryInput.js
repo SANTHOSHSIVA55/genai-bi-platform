@@ -1,18 +1,31 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Search, Sparkles, Loader2, ChevronDown, Database } from 'lucide-react';
 
-const QueryInput = ({ datasets, onSubmit, loading }) => {
-  const [question, setQuestion] = useState('');
+const QueryInput = ({ datasets, onSubmit, loading, initialQuestion = '', initialDatasetId = null }) => {
+  const [question, setQuestion] = useState(initialQuestion);
   const [selectedDataset, setSelectedDataset] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
+  const initialQuestionRef = useRef(initialQuestion);
 
   // Auto-select first dataset when datasets load
   useEffect(() => {
     if (datasets.length > 0 && !selectedDataset) {
-      setSelectedDataset(datasets[0].id);
+      const preferred =
+        initialDatasetId && datasets.some((d) => d.id === initialDatasetId)
+          ? initialDatasetId
+          : datasets[0].id;
+      setSelectedDataset(preferred);
     }
-  }, [datasets, selectedDataset]);
+  }, [datasets, selectedDataset, initialDatasetId]);
+
+  // Apply a question passed in after mount (e.g. re-running from History)
+  useEffect(() => {
+    if (initialQuestion && initialQuestion !== initialQuestionRef.current) {
+      initialQuestionRef.current = initialQuestion;
+      setQuestion(initialQuestion);
+    }
+  }, [initialQuestion]);
 
   const handleSubmit = (e) => {
     e.preventDefault();

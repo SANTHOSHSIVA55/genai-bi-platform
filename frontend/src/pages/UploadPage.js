@@ -2,29 +2,32 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload, Database, Trash2, FileSpreadsheet, FileText,
-  AlertCircle, CheckCircle2, Loader2, HardDrive, Table2
+  AlertCircle, Loader2, HardDrive, Eye
 } from 'lucide-react';
 import { getDatasets, deleteDataset } from '../api/api';
 import FileUpload from '../components/FileUpload';
+import ConfirmDialog from '../components/ConfirmDialog';
+import DatasetPreviewModal from '../components/DatasetPreviewModal';
 import toast from 'react-hot-toast';
 
 const UploadPage = () => {
   const [datasets, setDatasets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(null);
+  const [confirmTarget, setConfirmTarget] = useState(null);
+  const [previewTarget, setPreviewTarget] = useState(null);
+  const [fetchError, setFetchError] = useState(null);
 
   const fetchDatasets = useCallback(async () => {
     try {
       const res = await getDatasets();
       setDatasets(Array.isArray(res.data) ? res.data : (res.data?.datasets || []));
+      setFetchError(null);
     } catch (err) {
       console.warn('Could not fetch datasets:', err);
-      // Demo data
-      setDatasets([
-        { id: '1', name: 'Sales Data 2024', row_count: 15420, column_count: 12, file_type: 'csv', created_at: '2024-01-15T10:30:00Z', file_size: 2456789 },
-        { id: '2', name: 'Customer Analytics', row_count: 8930, column_count: 8, file_type: 'xlsx', created_at: '2024-02-10T14:20:00Z', file_size: 1234567 },
-        { id: '3', name: 'Product Inventory', row_count: 3200, column_count: 6, file_type: 'csv', created_at: '2024-03-05T09:00:00Z', file_size: 789012 },
-      ]);
+      const detail = err.response?.data?.detail;
+      setFetchError(typeof detail === 'string' ? detail : 'Unable to connect to the server.');
+      setDatasets([]);
     } finally {
       setLoading(false);
     }
@@ -38,17 +41,17 @@ const UploadPage = () => {
     setDatasets((prev) => [newDs, ...prev]);
   };
 
-  const handleDelete = async (id, name) => {
-    if (!window.confirm(`Delete dataset "${name}"? This action cannot be undone.`)) return;
-    setDeleting(id);
+  const handleDelete = async () => {
+    if (!confirmTarget) return;
+    setDeleting(confirmTarget.id);
     try {
-      await deleteDataset(id);
-      setDatasets((prev) => prev.filter((d) => d.id !== id));
-      toast.success(`"${name}" deleted successfully`);
+      await deleteDataset(confirmTarget.id);
+      setDatasets((prev) => prev.filter((d) => d.id !== confirmTarget.id));
+      toast.success(`"${confirmTarget.name}" deleted successfully`);
+      setConfirmTarget(null);
     } catch (err) {
-      // Demo mode
-      setDatasets((prev) => prev.filter((d) => d.id !== id));
-      toast.success(`"${name}" deleted`);
+      const detail = err.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : `Could not delete "${confirmTarget.name}".`);
     } finally {
       setDeleting(null);
     }
@@ -66,6 +69,9 @@ const UploadPage = () => {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const totalSize = datasets.reduce((s, d) => s + (d.file_size || 0), 0);
+  const totalRows = datasets.reduce((s, d) => s + (d.row_count || 0), 0);
+
   return (
     <div className="space-y-6">
       <motion.div
@@ -78,6 +84,20 @@ const UploadPage = () => {
         </h1>
         <p className="text-dark-400 text-sm mt-0.5">Upload and manage your datasets</p>
       </motion.div>
+
+      <AnimatePresence>
+        {fetchError && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="flex items-center gap-3 p-4 rounded-apple-lg bg-amber-500/8 border border-amber-500/15 text-amber-300"
+          >
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <p className="text-sm">{fetchError}</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="grid lg:grid-cols-2 gap-6">
         <FileUpload onUploadSuccess={handleUploadSuccess} />
@@ -98,15 +118,11 @@ const UploadPage = () => {
               <p className="text-dark-500 text-xs mt-0.5">Datasets</p>
             </div>
             <div className="p-3 rounded-apple bg-dark-800/40 border border-white/[0.04] text-center">
-              <p className="text-xl font-bold text-apple-green">
-                {datasets.reduce((s, d) => s + (d.row_count || 0), 0).toLocaleString()}
-              </p>
+              <p className="text-xl font-bold text-apple-green">{totalRows.toLocaleString()}</p>
               <p className="text-dark-500 text-xs mt-0.5">Total Rows</p>
             </div>
             <div className="p-3 rounded-apple bg-dark-800/40 border border-white/[0.04] text-center">
-              <p className="text-xl font-bold text-apple-blue">
-                {formatFileSize(datasets.reduce((s, d) => s + (d.file_size || 0), 0))}
-              </p>
+              <p className="text-xl font-bold text-apple-blue">{formatFileSize(totalSize)}</p>
               <p className="text-dark-500 text-xs mt-0.5">Storage Used</p>
             </div>
           </div>
@@ -114,14 +130,12 @@ const UploadPage = () => {
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-dark-400">Storage Usage</span>
-              <span className="text-dark-300 text-xs">
-                {formatFileSize(datasets.reduce((s, d) => s + (d.file_size || 0), 0))} / 500 MB
-              </span>
+              <span className="text-dark-300 text-xs">{formatFileSize(totalSize)} / 500 MB</span>
             </div>
             <div className="h-1.5 bg-dark-800 rounded-full overflow-hidden">
               <motion.div
                 initial={{ width: 0 }}
-                animate={{ width: `${Math.min((datasets.reduce((s, d) => s + (d.file_size || 0), 0) / (500 * 1024 * 1024)) * 100, 100)}%` }}
+                animate={{ width: `${Math.min((totalSize / (500 * 1024 * 1024)) * 100, 100)}%` }}
                 transition={{ duration: 1, ease: 'easeOut' }}
                 className="h-full bg-gradient-to-r from-primary-500 to-primary-400 rounded-full"
               />
@@ -206,13 +220,25 @@ const UploadPage = () => {
                       <td className="px-4 py-4 text-right text-dark-400 text-sm">{formatFileSize(ds.file_size)}</td>
                       <td className="px-4 py-4 text-right text-dark-500 text-sm">{ds.created_at ? new Date(ds.created_at).toLocaleDateString() : '\u2014'}</td>
                       <td className="px-4 py-4 text-right">
-                        <button
-                          onClick={() => handleDelete(ds.id, ds.name)}
-                          disabled={deleting === ds.id}
-                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-2.5 rounded-lg hover:bg-red-500/10 text-dark-500 hover:text-red-400 transition-all disabled:opacity-50"
-                        >
-                          {deleting === ds.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => setPreviewTarget(ds)}
+                            title="Preview data"
+                            aria-label={`Preview ${ds.name}`}
+                            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-2.5 rounded-lg hover:bg-primary-500/10 text-dark-500 hover:text-primary-400 transition-all"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setConfirmTarget(ds)}
+                            disabled={deleting === ds.id}
+                            title="Delete dataset"
+                            aria-label={`Delete ${ds.name}`}
+                            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-2.5 rounded-lg hover:bg-red-500/10 text-dark-500 hover:text-red-400 transition-all disabled:opacity-50"
+                          >
+                            {deleting === ds.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                          </button>
+                        </div>
                       </td>
                     </motion.tr>
                   ))}
@@ -222,6 +248,24 @@ const UploadPage = () => {
           </div>
         )}
       </motion.div>
+
+      <ConfirmDialog
+        open={!!confirmTarget}
+        title={`Delete "${confirmTarget?.name}"?`}
+        message="This action cannot be undone. All data and queries linked to this dataset will be removed."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        loading={deleting === confirmTarget?.id}
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmTarget(null)}
+      />
+
+      <DatasetPreviewModal
+        datasetId={previewTarget?.id}
+        datasetName={previewTarget?.name}
+        open={!!previewTarget}
+        onClose={() => setPreviewTarget(null)}
+      />
     </div>
   );
 };
