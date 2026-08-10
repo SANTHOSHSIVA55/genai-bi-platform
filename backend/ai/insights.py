@@ -7,6 +7,18 @@ from .columns import (
 )
 
 
+def _fmt(value) -> str:
+    """Format a possibly non-numeric value as a number, falling back to its text.
+
+    PostgreSQL aggregate columns can surface as Decimal (serialized to float) or,
+    for user-typed text columns, as strings; never crash on the format spec.
+    """
+    try:
+        return f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def generate_insights(question: str, data_sample: list, columns: list, columns_info: str = "") -> dict:
     num_rows = len(data_sample)
     num_cols = len(columns)
@@ -88,18 +100,18 @@ def generate_insights(question: str, data_sample: list, columns: list, columns_i
                 kpi_parts.append(f"Unique {dim_name}: {int(val):,}")
             elif low.startswith("avg_"):
                 dim_name = col[4:].replace("_", " ")
-                kpi_parts.append(f"Average {dim_name}: {val:,.2f}")
+                kpi_parts.append(f"Average {dim_name}: {_fmt(val)}")
             elif low.startswith("min_"):
                 dim_name = col[4:].replace("_", " ")
-                kpi_parts.append(f"Min {dim_name}: {val:,.2f}")
+                kpi_parts.append(f"Min {dim_name}: {_fmt(val)}")
             elif low.startswith("max_"):
                 dim_name = col[4:].replace("_", " ")
-                kpi_parts.append(f"Max {dim_name}: {val:,.2f}")
+                kpi_parts.append(f"Max {dim_name}: {_fmt(val)}")
             elif low.startswith("total_"):
                 dim_name = col[6:].replace("_", " ")
-                kpi_parts.append(f"Total {dim_name}: {val:,.2f}")
+                kpi_parts.append(f"Total {dim_name}: {_fmt(val)}")
             elif isinstance(val, (int, float)):
-                kpi_parts.append(f"{col}: {val:,.2f}")
+                kpi_parts.append(f"{col}: {_fmt(val)}")
             else:
                 kpi_parts.append(f"{col}: {val}")
 

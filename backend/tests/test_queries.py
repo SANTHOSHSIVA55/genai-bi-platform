@@ -1,6 +1,9 @@
 import io
+from decimal import Decimal
 
 from conftest import _unique, upload_csv
+from ai.insights import generate_insights
+from main import _json_safe
 
 
 def run_query(client, user, question, dataset_id):
@@ -9,6 +12,41 @@ def run_query(client, user, question, dataset_id):
         json={"question": question, "dataset_id": dataset_id},
         headers=user.headers,
     )
+
+
+class TestPostgresSerialization:
+    """PostgreSQL returns Decimal for aggregates; serialization must not stringify
+    numeric results or crash downstream insight formatting (regression for the
+    production-only 'Analyze this dataset' 500)."""
+
+    def test_json_safe_converts_decimal_to_float(self):
+        assert isinstance(_json_safe(Decimal("4210.50")), float)
+        assert _json_safe(Decimal("4210.50")) == 4210.5
+        assert _json_safe(42) == 42
+        assert _json_safe("text") == "text"
+        assert _json_safe(None) is None
+
+    def test_insights_tolerate_string_and_decimal_values(self):
+        columns = ["total_records", "avg_amount", "min_amount", "max_amount", "total_amount"]
+        rows = [
+            {
+                "total_records": 6,
+                "avg_amount": "701.67",  # Postgres Decimal serialized as float, but
+                "min_amount": "0.00",  # be safe against string-numeric values too
+                "max_amount": "1250.00",
+                "total_amount": "4210.00",
+            }
+        ]
+        result = generate_insights(
+            "Analyze this dataset and give me a complete business summary",
+            rows,
+            columns,
+            columns_info="",
+        )
+        joined = " | ".join(result["executive_summary"])
+        assert "Average amount: 701.67" in joined
+        assert "Total amount: 4,210.00" in joined
+
 
 
 class TestQuery:

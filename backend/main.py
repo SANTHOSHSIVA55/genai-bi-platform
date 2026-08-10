@@ -5,6 +5,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import List, Optional
 
 from dotenv import load_dotenv
@@ -166,6 +167,19 @@ def _client_ua(request: Request) -> Optional[str]:
 def _safe_filename(filename: str) -> str:
     """Strip any path components from an uploaded filename."""
     return os.path.basename(filename.replace("\\", "/"))
+
+
+def _json_safe(value):
+    """Convert a DB value into a JSON-serializable primitive.
+
+    PostgreSQL returns Decimal for aggregate functions (SUM/AVG/ROUND); those are
+    converted to float so downstream consumers receive real numbers, not strings.
+    """
+    if value is None or isinstance(value, (int, float, str, bool)):
+        return value
+    if isinstance(value, Decimal):
+        return float(value)
+    return str(value)
 
 
 def _get_owned_dataset(dataset_id: str, current_user: User, db: Session) -> Dataset:
@@ -491,10 +505,7 @@ def preview_dataset(
     for row in rows:
         item = {}
         for k, v in row.items():
-            if isinstance(v, (int, float, str, bool)) or v is None:
-                item[k] = v
-            else:
-                item[k] = str(v)
+            item[k] = _json_safe(v)
         serialized.append(item)
 
     return DatasetPreviewResponse(
@@ -623,12 +634,7 @@ def execute_nl_query(
     for row in rows:
         serialized = {}
         for k, v in row.items():
-            if v is None:
-                serialized[k] = None
-            elif isinstance(v, (int, float, str, bool)):
-                serialized[k] = v
-            else:
-                serialized[k] = str(v)
+            serialized[k] = _json_safe(v)
         serialized_rows.append(serialized)
 
     # Detect chart type
