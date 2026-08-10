@@ -16,6 +16,7 @@ import SummaryPanel from '../components/SummaryPanel';
 import AIQualityBadge from '../components/AIQualityBadge';
 import PipelineStages from '../components/PipelineStages';
 import DatasetProfile from '../components/DatasetProfile';
+import GuidancePanel from '../components/GuidancePanel';
 import ErrorPanel from '../components/ErrorPanel';
 import DatasetPreviewModal from '../components/DatasetPreviewModal';
 import { exportCsv, downloadJson } from '../utils/export';
@@ -361,6 +362,16 @@ const Dashboard = () => {
                   <PipelineStages stages={queryResult.pipeline_stages} />
                 )}
 
+                {queryResult.chart_config?.title === 'Guidance' ? (
+                  <GuidancePanel
+                    message={(queryResult.summary?.executive_summary || [])[0] || 'Please ask a more specific question.'}
+                    issues={queryResult.validation_info?.issues}
+                    generatedSql={queryResult.generated_sql}
+                    followUps={queryResult.follow_up_questions}
+                    onFollowUp={(q) => handleFollowUp(q)}
+                  />
+                ) : (
+                  <>
                 {queryResult.validation_info && !queryResult.validation_info.valid && (
                   <ErrorPanel
                     question={queryResult.question}
@@ -373,6 +384,16 @@ const Dashboard = () => {
                     }}
                     suggestedFix={queryResult.validation_info.suggested_fix}
                   />
+                )}
+
+                {queryResult.data && queryResult.data.length === 0 && !queryResult.generated_sql && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="glass-card p-8 text-center"
+                  >
+                    <p className="text-dark-500 text-sm">No data returned for this query. Try rephrasing your question.</p>
+                  </motion.div>
                 )}
 
                 {queryResult.data && queryResult.data.length > 0 && (
@@ -408,6 +429,8 @@ const Dashboard = () => {
                   generatedSql={queryResult.generated_sql}
                   onFollowUp={(q) => handleFollowUp(q)}
                 />
+                  </>
+                )}
               </>
             )}
           </div>
