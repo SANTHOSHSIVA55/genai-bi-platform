@@ -8,7 +8,16 @@ columns the dataset does not have (e.g. a time trend without a date column).
 """
 from .columns import _parse_columns_info
 from .profile import detect_currency, format_number, _money
-from .questions import classify_columns, _preferred_metric, _preferred_category, generate_follow_ups
+from .questions import (
+    classify_columns,
+    _preferred_metric,
+    _preferred_category,
+    generate_follow_ups,
+    _singularize,
+    _pluralize,
+    extract_entity,
+)
+from .semantics import format_semantic_value
 
 _ANALYSIS_KEYWORDS = [
     "analyze", "analysis", "summary", "overview", "describe", "tell me about",
@@ -27,6 +36,19 @@ def _fmt(value) -> str:
         return f"{float(value):,.2f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _fmt_col(value, col: str, semantic_types: dict, currency) -> str:
+    """Format a value according to the column's detected semantic type so e.g.
+    COUNT results are plain integers and only monetary columns get currency."""
+    st = (semantic_types or {}).get(col)
+    if not st:
+        from .semantics import infer_semantic_type
+
+        st = infer_semantic_type(col)
+    if st == "currency":
+        return format_semantic_value(value, "currency", currency)
+    return format_semantic_value(value, st, currency)
 
 
 _LABEL_PREFIXES = [
@@ -75,7 +97,7 @@ def _data_columns(data_sample: list, columns: list) -> dict:
 
 
 def generate_insights(question: str, data_sample: list, columns: list, columns_info: str = "",
-                      enrichment: dict = None, dataset_name: str = "") -> dict:
+                      enrichment: dict = None, dataset_name: str = "", semantic_types: dict = None) -> dict:
     num_rows = len(data_sample)
     num_cols = len(columns)
 
@@ -230,13 +252,13 @@ def generate_insights(question: str, data_sample: list, columns: list, columns_i
             label = _metric_label(total_col).replace("Total ", "").strip() if total_col else _metric_label(met_col)
             summaries.append(f"'{dim_val}' accounts for {_fmt(pct_val)}% of total {label}.")
             if total_col:
-                summaries.append(f"Total {label} is {format_number(row.get(total_col), currency)}.")
+                summaries.append(f"Total {label} is {_fmt_col(row.get(total_col), total_col, semantic_types, currency)}.")
             if dimension and metric:
                 recommendations.append(f"Compare {dimension} shares of {metric} to prioritize where to focus.")
                 recommendations.append(f"Explore what drives {dim_val}'s share of {metric}.")
         elif dim_val is not None and met_col is not None:
             label = _metric_label(met_col)
-            summaries.append(f"The {dimension or columns[0]} '{dim_val}' has {label} of {format_number(row.get(met_col), currency)}.")
+            summaries.append(f"The {dimension or columns[0]} '{dim_val}' has {label} of {_fmt_col(row.get(met_col), met_col, semantic_types, currency)}.")
 
         for col in columns:
             val = row.get(col)
@@ -246,7 +268,7 @@ def generate_insights(question: str, data_sample: list, columns: list, columns_i
                 if any(k in col.lower() for k in ("percentage", "pct", "share", "proportion")):
                     summaries.append(f"{_metric_label(col)}: {_fmt(val)}%")
                 else:
-                    summaries.append(f"{_metric_label(col)}: {format_number(val, currency)}")
+                    summaries.append(f"{_metric_label(col)}: {_fmt_col(val, col, semantic_types, currency)}")
             else:
                 summaries.append(f"{col.replace('_', ' ')}: {val}")
 
@@ -277,20 +299,20 @@ def generate_insights(question: str, data_sample: list, columns: list, columns_i
 
         if values:
             top_name, top_val = values[0]
-            summaries.append(f"'{top_name}' leads with {format_number(top_val, currency)} in {_metric_label(met_col)}.")
+            summaries.append(f"'{top_name}' leads with {_fmt_col(top_val, met_col, semantic_types, currency)} in {_metric_label(met_col)}.")
         if len(values) >= 2:
             second_name, second_val = values[1]
-            summaries.append(f"'{second_name}' follows with {format_number(second_val, currency)}.")
+            summaries.append(f"'{second_name}' follows with {_fmt_col(second_val, met_col, semantic_types, currency)}.")
         if len(values) >= 2:
             bottom_name, bottom_val = values[-1]
-            summaries.append(f"'{bottom_name}' has the lowest at {format_number(bottom_val, currency)}.")
+            summaries.append(f"'{bottom_name}' has the lowest at {_fmt_col(bottom_val, met_col, semantic_types, currency)}.")
         if len(values) >= 2:
             total = sum(v for _, v in values)
             top_pct = (top_val / total * 100) if total > 0 else 0
             summaries.append(f"'{top_name}' accounts for {top_pct:.0f}% of total {_metric_label(met_col)}.")
 
         avg_val = sum(v for _, v in values) / len(values) if values else 0
-        summaries.append(f"The average {_metric_label(met_col)} across all {dim_col}s is {format_number(avg_val, currency)}.")
+        summaries.append(f"The average {_metric_label(met_col)} across all {dim_col}s is {_fmt_col(avg_val, met_col, semantic_types, currency)}.")
 
         if len(values) >= 2:
             recommendations.append(f"Drill into '{top_name}' to identify what drives its high {_metric_label(met_col)}.")
@@ -307,7 +329,7 @@ def generate_insights(question: str, data_sample: list, columns: list, columns_i
         }
 
     # ── Ranking insights (e.g., "top 5 products by revenue") ──────────────
-    is_ranking = any(w in q for w in ["top ", "top 5", "top 10", "bottom ", "rank", "best", "worst", "highest", "lowest"])
+    is_ranking = any(w in q for w in ["top ", "top 5", "top 10", "bottom ", "rank", "best", "worst", "highest", "lowest", "most", "least"])
     if is_ranking and dc["numeric"]:
         met_col = dc["numeric"][0]
         values = [row.get(met_col, 0) or 0 for row in data_sample]
@@ -315,24 +337,77 @@ def generate_insights(question: str, data_sample: list, columns: list, columns_i
             max_val = max(values)
             min_val = min(values)
             avg_val = sum(values) / len(values)
+            st = (semantic_types or {}).get(met_col)
+            if not st:
+                from .semantics import infer_semantic_type
 
-            if num_rows <= 20:
-                summaries.append(f"{_metric_label(met_col)} ranges from {format_number(min_val, currency)} to {format_number(max_val, currency)} (average: {format_number(avg_val, currency)}).")
+                st = infer_semantic_type(met_col)
+            is_count = st == "count"
+
+            dim_label = (dc["text"][0] if dc["text"] else "group").replace("_", " ").lower()
+            entity = extract_entity(question)
+            if is_count:
+                if entity:
+                    label = f"{_singularize(entity)} count"
+                    ent_sing = _singularize(entity)
+                    ent_plural = _pluralize(ent_sing)
+                else:
+                    label = _metric_label(met_col)
+                    ent_sing, ent_plural = "", ""
             else:
-                summaries.append(f"Showing top {num_rows} records by {_metric_label(met_col)}.")
+                label = _metric_label(met_col)
+                ent_sing, ent_plural = "", ""
 
-            if dc["text"]:
+            max_str = f"{int(round(max_val)):,}" if is_count else format_number(max_val, currency)
+            min_str = f"{int(round(min_val)):,}" if is_count else format_number(min_val, currency)
+
+            # All groups tied -> describe the tie, never a meaningless range.
+            if max_val == min_val and num_rows > 1 and dc["text"]:
+                names = [str(row.get(dc["text"][0], "Unknown")) for row in data_sample]
+                if is_count and ent_sing:
+                    summaries.append(f"All {num_rows} {_pluralize(dim_label)} have {int(round(max_val)):,} {ent_sing} each.")
+                else:
+                    summaries.append(f"All {num_rows} {_pluralize(dim_label)} have the same {label} of {max_str}.")
+                if len(names) > 1:
+                    head, last = ", ".join(names[:-1]), names[-1]
+                    summaries.append(f"{head}, and {last} are tied for the highest {label}.")
+            elif num_rows <= 20:
+                if is_count:
+                    summaries.append(f"{label} ranges from {min_str} to {max_str} (average: {int(round(avg_val)):,}).")
+                else:
+                    summaries.append(f"{label} ranges from {min_str} to {max_str} (average: {format_number(avg_val, currency)}).")
+            else:
+                summaries.append(f"Showing top {num_rows} records by {label}.")
+
+            if max_val > min_val and dc["text"]:
                 top_row = max(data_sample, key=lambda r: r.get(met_col, 0) or 0)
                 top_name = top_row.get(dc["text"][0], "Unknown")
-                summaries.append(f"'{top_name}' tops the list with {format_number(max_val, currency)}.")
+                summaries.append(f"'{top_name}' tops the list with {max_str}.")
                 if num_rows > 1:
                     bottom_row = min(data_sample, key=lambda r: r.get(met_col, 0) or 0)
                     bottom_name = bottom_row.get(dc["text"][0], "Unknown")
-                    summaries.append(f"'{bottom_name}' ranks last with {format_number(min_val, currency)}.")
+                    summaries.append(f"'{bottom_name}' ranks last with {min_str}.")
 
         if dc["text"]:
-            recommendations.append(f"Explore what differentiates top-performing {dc['text'][0]}s from the rest.")
-        recommendations.append(f"Consider which drivers of {_metric_label(met_col)} can be optimized for better results.")
+            if len(values) > 1 and max_val == min_val:
+                dim_word = _pluralize(dc["text"][0].replace("_", " ")).lower()
+                total_count = int(round(sum(values)))
+                if ent_plural:
+                    recommendations.append(
+                        f"All {num_rows} {dim_word} have equal {ent_plural} representation. "
+                        f"Because the dataset contains only {total_count} {ent_plural}, there is "
+                        f"insufficient evidence of concentration in any single {dc['text'][0].replace('_', ' ').lower()}."
+                    )
+                else:
+                    recommendations.append(
+                        f"All {num_rows} {dim_word} have equal {label}. "
+                        f"With only {total_count} records across {num_rows} {dim_word}, there is "
+                        f"insufficient evidence of concentration."
+                    )
+            else:
+                recommendations.append(f"Explore what differentiates top-performing {dc['text'][0].replace('_', ' ')}s from the rest.")
+        if max_val > min_val:
+            recommendations.append(f"Consider which drivers of {label} can be optimized for better results.")
 
         follow_ups = generate_follow_ups(question, cols_meta)
         return {
@@ -353,7 +428,7 @@ def generate_insights(question: str, data_sample: list, columns: list, columns_i
         avg_val = total / len(values)
         max_val = max(values)
         min_val = min(values)
-        summaries.append(f"'{_metric_label(col)}' ranges from {format_number(min_val, currency)} to {format_number(max_val, currency)} (average: {format_number(avg_val, currency)}).")
+        summaries.append(f"'{_metric_label(col)}' ranges from {_fmt_col(min_val, col, semantic_types, currency)} to {_fmt_col(max_val, col, semantic_types, currency)} (average: {_fmt_col(avg_val, col, semantic_types, currency)}).")
 
         if num_rows > 1:
             sorted_vals = sorted(values, reverse=True)

@@ -27,7 +27,7 @@ const KPI_ICONS = {
   total: Database,
 };
 
-const renderKpiGrid = (data, title, currency, money) => {
+const renderKpiGrid = (data, title, renderValue) => {
   if (!data || data.length === 0) return null;
   const row = data[0];
   const entries = Object.entries(row).filter(([_, v]) => v != null);
@@ -39,10 +39,7 @@ const renderKpiGrid = (data, title, currency, money) => {
         {entries.map(([key, val]) => {
           const iconKey = Object.keys(KPI_ICONS).find(k => key.toLowerCase().includes(k));
           const Icon = iconKey ? KPI_ICONS[iconKey] : Hash;
-          const isNumeric = typeof val === 'number';
-          const displayVal = isNumeric
-            ? (currency ? money(val) : (Number.isInteger(val) ? val.toLocaleString() : Number(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })))
-            : String(val);
+          const displayVal = renderValue(key, val);
           const label = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
           return (
             <div key={key} className="kpi-card p-4">
@@ -90,13 +87,28 @@ const smartAxisKey = (data, columns, preferred) => {
   return columns[0] || '';
 };
 
-const ChartDisplay = ({ data, chartConfig, intentType, currency }) => {
+const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }) => {
   const safeData = useMemo(() => {
     if (!data || !Array.isArray(data) || data.length === 0) return [];
     return data.filter(row => row && typeof row === 'object');
   }, [data]);
 
   const money = makeMoneyFormatter(currency);
+
+  // Per-column semantic formatting: COUNT results are always plain integers,
+  // only genuinely monetary columns get the currency symbol; PERCENTAGE columns
+  // get a % suffix; date/text columns pass through.
+  const renderValue = (col, val) => {
+    if (val == null || val === '') return '\u2014';
+    if (typeof val === 'number') {
+      const st = (semanticTypes || {})[col];
+      if (st === 'count') return formatNumber(val);
+      if (st === 'percentage') return formatNumber(val) + '%';
+      if (st === 'currency') return money(val);
+      return currency ? money(val) : formatNumber(val);
+    }
+    return String(val);
+  };
 
   if (safeData.length === 0 || !chartConfig) return null;
 
@@ -127,7 +139,7 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency }) => {
           </h3>
           <span className="text-xs px-3 py-1 rounded-full bg-dark-700/50 text-dark-400 uppercase tracking-wider">Analysis</span>
         </div>
-        {renderKpiGrid(safeData, chartConfig.description || '', currency, money)}
+        {renderKpiGrid(safeData, chartConfig.description || '', renderValue)}
       </motion.div>
     );
   }
@@ -148,7 +160,7 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency }) => {
             <Target className="w-5 h-5 text-primary-400" />
           </div>
         </div>
-        <div className="kpi-value">{currency ? money(kpiValue) : formatNumber(kpiValue)}</div>
+        <div className="kpi-value">{renderValue(xKey, kpiValue)}</div>
         <div className="mt-2 flex items-center gap-1.5">
           <div className="w-1.5 h-1.5 rounded-full bg-apple-green" />
           <span className="text-[11px] text-dark-500">
@@ -177,7 +189,7 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency }) => {
         {payload.map((entry, i) => (
           <p key={i} className="text-sm flex justify-between gap-4" style={{ color: entry.color }}>
             <span className="truncate">{entry.name}:</span>
-            <span className="font-semibold whitespace-nowrap">{currency ? money(entry.value) : formatNumber(entry.value)}</span>
+            <span className="font-semibold whitespace-nowrap">{renderValue(entry.dataKey, entry.value)}</span>
           </p>
         ))}
       </div>
@@ -186,7 +198,28 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency }) => {
 
   const tickStyle = { fill: '#8e8e93', fontSize: 11, fontFamily: 'Inter, sans-serif' };
   const gridStyle = { strokeDasharray: '3 3', stroke: '#2c2c2e' };
-  const axisTick = (v) => (currency ? currency + formatNumber(v) : formatNumber(v));
+  // Axis ticks follow the result's semantic type: counts plain, currency with
+  // symbol, percentages with %, dates shortened to Jan/Feb/...
+  const axisTick = (v) => {
+    const col = numericCols[0] || yKey;
+    const st = (semanticTypes || {})[col];
+    if (typeof v === 'number') {
+      if (st === 'count') return formatNumber(v);
+      if (st === 'percentage') return formatNumber(v) + '%';
+      if (st === 'currency') return money(v);
+      return currency ? currency + formatNumber(v) : formatNumber(v);
+    }
+    if (st === 'date' && typeof v === 'string') {
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) {
+        const month = d.toLocaleString('en', { month: 'short' });
+        return d.getFullYear() === new Date().getFullYear()
+          ? month
+          : `${month} '${String(d.getFullYear()).slice(2)}`;
+      }
+    }
+    return String(v);
+  };
 
   const renderBarChart = () => {
     const isHorizontal = isRanking && safeData.length <= 20;
@@ -325,9 +358,7 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency }) => {
               <tr key={i} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
                 {columns.map((col) => (
                   <td key={col} className="px-4 py-3 text-dark-200">
-                    {typeof row[col] === 'number'
-                      ? (currency ? money(row[col]) : formatNumber(row[col]))
-                      : (row[col] != null ? String(row[col]) : '\u2014')}
+                    {renderValue(col, row[col])}
                   </td>
                 ))}
               </tr>

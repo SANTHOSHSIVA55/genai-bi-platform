@@ -27,7 +27,9 @@ from ai import (
     validate_sql_intent,
 )
 from ai.columns import _parse_columns_info
+from ai.clarity import check_question_feasibility
 from ai.profile import build_profile, detect_currency
+from ai.semantics import analyze_sql_semantics
 from ai.questions import (
     _preferred_metric,
     _preferred_category,
@@ -52,7 +54,7 @@ from auth import (
     validate_refresh_token,
     verify_password,
 )
-from data_cleaner import clean_dataframe, get_column_info, read_uploaded_file
+from data_cleaner import assess_data_quality, clean_dataframe, get_column_info, read_uploaded_file
 from database import engine, get_db, get_dynamic_table_names, init_db
 from logging_config import request_id_var, setup_logging
 from models import Dataset, QueryLog, User
@@ -93,7 +95,7 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGI
 ]
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-ALLOWED_EXTENSIONS = {"csv", "xlsx", "xls", "pdf"}
+ALLOWED_EXTENSIONS = {"csv", "tsv", "json", "xlsx", "xls", "pdf"}
 PREVIEW_LIMIT = 20
 RESULT_LIMIT = 1000
 
@@ -413,12 +415,13 @@ async def upload_dataset(
 
     try:
         df = read_uploaded_file(content, safe_filename)
+        data_quality = assess_data_quality(df)
         df = clean_dataframe(df)
     except HTTPException:
         raise
     except Exception as e:
         logger.error("Failed to parse upload %s: %s", safe_filename, e)
-        raise HTTPException(status_code=400, detail="Failed to read file. Ensure it is a valid CSV, Excel or PDF.")
+        raise HTTPException(status_code=400, detail="Failed to read file. Ensure it is a valid CSV, TSV, JSON, Excel or PDF.")
 
     if df.empty:
         raise HTTPException(status_code=400, detail="File contains no valid data after cleaning")
@@ -453,7 +456,9 @@ async def upload_dataset(
                 entity_id=dataset.id, details=f"table={table_name} rows={len(df)}",
                 ip_address=_client_ip(request))
 
-    return DatasetResponse.model_validate(dataset)
+    response = DatasetResponse.model_validate(dataset)
+    response.data_quality = data_quality
+    return response
 
 
 @app.get("/api/data/datasets", response_model=DatasetListResponse, tags=["Data"])
@@ -754,6 +759,17 @@ def execute_nl_query(
             cols_meta, n_stages=2, db=db, current_user=current_user, dataset=dataset,
         )
 
+    # Guidance: ambiguous ("What is the best product?") and unsupported
+    # ("Why did sales decrease?") questions are answered honestly instead of
+    # fabricating a SQL answer.
+    feasibility = check_question_feasibility(question, cols_meta)
+    if feasibility["guidance"]:
+        return _guidance_response(
+            question,
+            feasibility["guidance"],
+            cols_meta, n_stages=2, db=db, current_user=current_user, dataset=dataset,
+        )
+
     generated_sql = nl_to_sql(body.question, dataset.table_name, columns_info)
 
     if generated_sql.startswith("AI_ERROR"):
@@ -847,10 +863,15 @@ def execute_nl_query(
     currency = detect_currency(dataset.name, groups.get("numeric", []) + groups.get("categorical", []))
     enrichment = _compute_enrichment(serialized_rows, cols_meta, dataset, currency)
 
+    # Semantic types per result column: COUNT results are never currency, only
+    # genuinely monetary fields get currency formatting.
+    semantic_types = analyze_sql_semantics(safe_sql, columns, cols_meta, serialized_rows)
+
     # Generate insights (capability-aware, schema-aware, result-aware)
     insights = generate_insights(
         body.question, serialized_rows, columns, columns_info,
         enrichment=enrichment, dataset_name=dataset.name,
+        semantic_types=semantic_types,
     )
 
     # Generate AI quality indicators with capability-aware confidence
@@ -893,6 +914,7 @@ def execute_nl_query(
         validation_info=validation_info,
         pipeline_stages=_pipeline(len(_PIPELINE_STAGES)),
         currency=currency,
+        semantic_types=semantic_types,
     )
 
 

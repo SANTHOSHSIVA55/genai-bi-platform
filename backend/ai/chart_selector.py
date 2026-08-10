@@ -79,7 +79,7 @@ def detect_chart_type(question: str, columns: list, data_sample: list) -> dict:
 
     chart_type = "table"
 
-    is_ranking = any(w in q for w in ["top", "bottom", "rank", "best", "worst", "highest", "lowest"])
+    is_ranking = any(w in q for w in ["top", "bottom", "rank", "best", "worst", "highest", "lowest", "most", "least"])
     is_trend = any(w in q for w in ["trend", "over time", "monthly", "weekly", "daily", "yearly", "timeline", "growth"])
     is_distribution = any(w in q for w in ["percentage", "percent", "distribution", "share", "proportion", "breakdown", "%"])
 
@@ -105,6 +105,15 @@ def detect_chart_type(question: str, columns: list, data_sample: list) -> dict:
     # No category and no date -> table
     if chart_type == "bar" and not text_cols and not date_cols:
         chart_type = "table"
+
+    # Concise, human-friendly title for grouped ranking questions:
+    # "Which cities have the most suppliers?" -> "Suppliers by City"
+    if is_ranking and chart_type == "bar" and text_cols:
+        from .questions import extract_entity
+
+        entity = extract_entity(question)
+        if entity:
+            title = f"{entity.title()} by {text_cols[0].replace('_', ' ').title()}"
 
     return {
         "chart_type": chart_type,

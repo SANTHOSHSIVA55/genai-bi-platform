@@ -17,13 +17,18 @@ _METRIC_DTYPES = ("float64", "int64", "float32", "int32", "int8", "int16")
 # ─── Currency detection ───────────────────────────────────────────────────
 def detect_currency(dataset_name: str, column_names: list) -> str | None:
     """Best-effort currency detection. Never invents a currency: returns None
-    unless the dataset name/columns clearly reference one."""
+    unless the dataset name/columns clearly reference one.
+
+    Uses word boundaries (treating ``_`` as a separator) so a plain "rs" inside
+    a word like "suppliers" is never mistaken for Indian Rupees."""
     names = f"{dataset_name} {' '.join(column_names)}".lower()
-    if any(k in names for k in ("rupee", "inr", " rs ", "rs ", "₹", "expense", "spend", "salary")):
+    tokens = re.sub(r"[^a-z0-9]+", " ", names)
+    if (re.search(r"\b(rupee|rupees|inr|rs|expense|expenses|spend|spending|spent|salary|salaries)\b", tokens)
+            or "₹" in names):
         return "₹"
-    if any(k in names for k in ("usd", "dollar", "$")):
+    if re.search(r"\b(usd|dollar|dollars)\b", tokens) or "$" in names:
         return "$"
-    if any(k in names for k in ("eur", "euro", "€")):
+    if re.search(r"\b(eur|euro|euros)\b", tokens) or "€" in names:
         return "€"
     return None
 

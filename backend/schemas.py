@@ -93,6 +93,7 @@ class DatasetResponse(BaseModel):
     column_count: int
     columns_info: Optional[str] = None
     file_size: Optional[int] = 0
+    data_quality: Optional[dict] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -201,6 +202,7 @@ class QueryResultResponse(BaseModel):
     validation_info: Optional[ValidationInfo] = None
     pipeline_stages: List[dict] = []
     currency: Optional[str] = None
+    semantic_types: dict = {}
 
 
 class QueryLogResponse(BaseModel):

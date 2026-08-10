@@ -64,6 +64,16 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
         intent["is_aggregation"] = False
         intent["is_comparison"] = False
 
+    # Numeric filters ("revenue above 10000") -> WHERE clause injected after FROM.
+    where = _build_where(intent)
+
+    def _finish(sql: str) -> str:
+        if where and sql:
+            m = re.search(r'\bFROM\s+"[A-Za-z0-9_]+"', sql)
+            if m:
+                return sql[:m.end()] + " WHERE " + where + sql[m.end():]
+        return sql
+
     # COMPREHENSIVE ANALYSIS INTENT
     if intent["intent_type"] == "analysis":
         select_parts = [f'COUNT(*) AS total_records']
@@ -77,7 +87,7 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
         if not select_parts:
             select_parts = [f'COUNT(*) AS total_records']
         select_clause = ", ".join(select_parts)
-        return f'SELECT {select_clause} FROM "{table_name}"'
+        return _finish(f'SELECT {select_clause} FROM "{table_name}"')
 
     # PERCENTAGE / SHARE: "What percentage of total X is Y?" -> single row
     if cat_cols and metric_cols and any(kw in q for kw in ("percentage", "percent", "proportion", "what %", "% of", "share")):
@@ -124,7 +134,7 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
                 metric = _preferred_metric(metric_cols)
             dim = cat_cols[0]
             esc = target.replace("'", "''")
-            return (
+            return _finish(
                 f'SELECT "{dim}" AS dimension, '
                 f'ROUND(SUM(CASE WHEN "{dim}" = \'{esc}\' THEN "{metric}" ELSE 0 END) * 100.0 '
                 f'/ NULLIF(SUM("{metric}"), 0), 2) AS percentage, '
@@ -135,18 +145,21 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
     # COUNT without GROUP BY
     if intent["is_count_query"] and not intent["group_col"]:
         if intent["agg_col"]:
-            return f'SELECT COUNT(DISTINCT "{intent["agg_col"]}") AS total_{intent["agg_col"]} FROM "{table_name}"'
-        return f'SELECT COUNT(*) AS total_count FROM "{table_name}"'
+            return _finish(f'SELECT COUNT(DISTINCT "{intent["agg_col"]}") AS total_{intent["agg_col"]} FROM "{table_name}"')
+        return _finish(f'SELECT COUNT(*) AS total_count FROM "{table_name}"')
 
     # COUNT with GROUP BY
     if intent["is_count_query"] and intent["group_col"]:
-        return f'SELECT "{intent["group_col"]}", COUNT(*) AS count FROM "{table_name}" GROUP BY "{intent["group_col"]}" ORDER BY count DESC'
+        order = intent["sort_order"] or "DESC"
+        alias = intent.get("entity") or "count"
+        limit = intent.get("limit") or 1000
+        return _finish(f'SELECT "{intent["group_col"]}", COUNT(*) AS {alias} FROM "{table_name}" GROUP BY "{intent["group_col"]}" ORDER BY {alias} {order} LIMIT {limit}')
 
     # COMPARISON: aggregate metric grouped by dimension
     if intent["intent_type"] == "comparison" and intent["group_col"] and intent["agg_col"]:
         alias = f'{intent["agg_func"].lower()}_{intent["agg_col"]}'
         sql = f'SELECT "{intent["group_col"]}", {intent["agg_func"]}("{intent["agg_col"]}") AS {alias} FROM "{table_name}" GROUP BY "{intent["group_col"]}" ORDER BY {alias} DESC'
-        return sql
+        return _finish(sql)
 
     # RANKING: sort by metric
     if intent["intent_type"] == "ranking":
@@ -157,7 +170,7 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
             sql = f'SELECT "{intent["group_col"]}", {func}("{intent["agg_col"]}") AS {alias} FROM "{table_name}" GROUP BY 1 ORDER BY {alias} {intent["sort_order"] or "DESC"}'
             if intent["limit"]:
                 sql += f' LIMIT {intent["limit"]}'
-            return sql
+            return _finish(sql)
         select_cols = all_cols
         if intent["group_col"] and intent["agg_col"]:
             select_cols = f'"{intent["group_col"]}", "{intent["agg_col"]}"'
@@ -165,7 +178,7 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
         sort_col = intent["agg_col"] if intent["agg_col"] else (numeric_cols[0] if numeric_cols else col_names[0])
         sql += f' ORDER BY "{sort_col}" {intent["sort_order"] or "DESC"}'
         sql += f' LIMIT {intent["limit"] or 10}'
-        return sql
+        return _finish(sql)
 
     # Aggregation with GROUP BY
     if intent["is_aggregation"] and intent["group_col"] and intent["agg_col"]:
@@ -173,26 +186,39 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
         sql = f'SELECT "{intent["group_col"]}", {intent["agg_func"]}("{intent["agg_col"]}") AS {alias} FROM "{table_name}" GROUP BY "{intent["group_col"]}" ORDER BY {alias} DESC'
         if intent["limit"]:
             sql += f' LIMIT {intent["limit"]}'
-        return sql
+        return _finish(sql)
 
     # Aggregation without GROUP BY
     if intent["is_aggregation"] and intent["agg_col"]:
-        return f'SELECT {intent["agg_func"]}("{intent["agg_col"]}") AS {intent["agg_func"].lower()}_{intent["agg_col"]} FROM "{table_name}"'
+        return _finish(f'SELECT {intent["agg_func"]}("{intent["agg_col"]}") AS {intent["agg_func"].lower()}_{intent["agg_col"]} FROM "{table_name}"')
 
     # Time series
     if intent["is_time_series"] and date_cols and numeric_cols:
-        return f'SELECT "{date_cols[0]}", "{numeric_cols[0]}" FROM "{table_name}" ORDER BY "{date_cols[0]}" ASC LIMIT 100'
+        return _finish(f'SELECT "{date_cols[0]}", "{numeric_cols[0]}" FROM "{table_name}" ORDER BY "{date_cols[0]}" ASC LIMIT 100')
 
     # List all
     if intent["is_list_all"]:
-        return f'SELECT {all_cols} FROM "{table_name}" LIMIT 100'
+        return _finish(f'SELECT {all_cols} FROM "{table_name}" LIMIT 100')
 
     # Sort-only queries
     if intent["sort_order"] and numeric_cols:
         sort_col = numeric_cols[0]
-        return f'SELECT {all_cols} FROM "{table_name}" ORDER BY "{sort_col}" {intent["sort_order"]} LIMIT {intent["limit"] or 10}'
+        return _finish(f'SELECT {all_cols} FROM "{table_name}" ORDER BY "{sort_col}" {intent["sort_order"]} LIMIT {intent["limit"] or 10}')
 
-    return f'SELECT {all_cols} FROM "{table_name}" LIMIT {intent["limit"] or 20}'
+    return _finish(f'SELECT {all_cols} FROM "{table_name}" LIMIT {intent["limit"] or 20}')
+
+
+def _build_where(intent: dict) -> str:
+    """Render the intent's numeric filter as a ``"col" op value`` WHERE clause."""
+    f = intent.get("filter")
+    if not f:
+        return ""
+    val = f.get("value")
+    if isinstance(val, float) and val == int(val):
+        val_str = str(int(val))
+    else:
+        val_str = repr(val)
+    return f'"{f["column"]}" {f["op"]} {val_str}'
 
 
 def nl_to_sql(question: str, table_name: str, columns_info: str) -> str:

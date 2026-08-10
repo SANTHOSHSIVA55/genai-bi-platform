@@ -16,13 +16,28 @@ def _parse_columns_info(columns_info: str) -> list:
         return []
 
 
+# Names that denote a real numeric measure even when their values are fully
+# unique (a per-row revenue/amount/salary column must never be mistaken for an
+# ID just because every row has a different number).
+_METRIC_NAME_HINTS = (
+    "revenue", "sales", "amount", "price", "cost", "expense", "spend",
+    "profit", "income", "salary", "units", "quantity", "qty", "count",
+    "score", "rating", "total", "sum", "avg", "value", "margin", "share",
+    "rate", "ratio", "volume", "gross", "net", "budget", "payout", "fee",
+    "weight", "size", "year", "age", "duration", "time",
+)
+
+
 def _is_id_column(col_name: str, dtype: str = "", nunique: int = 0, total_rows: int = 0) -> bool:
     low = col_name.lower().strip()
     id_keywords = ["id", "code", "key", "sku", "uuid", "hash"]
     if any(kw in low for kw in id_keywords):
         return True
+    # A fully-unique integer column is only ID-like when its name gives no
+    # signal that it is a real measure (e.g. order_number, employee_number).
     if dtype in ("int64", "int32") and total_rows > 0 and nunique == total_rows and nunique > 10:
-        return True
+        if not any(hint in low for hint in _METRIC_NAME_HINTS):
+            return True
     return False
 
 

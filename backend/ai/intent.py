@@ -4,6 +4,29 @@ import re
 from .columns import _match_col, _simple_stem
 from .questions import _preferred_metric
 
+# Nouns/phrases that signal a numeric MEASURE is being asked about. Used to
+# decide whether a fallback metric applies: "Which cities have the most
+# suppliers?" must COUNT suppliers, NOT aggregate whatever the first numeric
+# column happens to be (e.g. a "since" year). "Which region has the most
+# sales?" still aggregates the measure.
+_METRIC_NOUNS = (
+    "revenue", "sales", "amount", "spend", "spending", "spent", "expense",
+    "expenses", "cost", "costs", "price", "unit", "units", "quantity", "qty",
+    "salary", "salaries", "profit", "income", "value", "margin", "volume",
+    "gross", "net", "total", "sum", "average", "avg", "score", "rating",
+    "count", "fee", "budget", "payout", "purchase", "purchases", "order value",
+    "revenue by", "sales by",
+)
+
+
+def _mentions_metric(phrase: str) -> bool:
+    """True when a phrase refers to a numeric measure (not just an entity)."""
+    low = (phrase or "").lower()
+    for w in re.findall(r"[a-z']+", low):
+        if w in _METRIC_NOUNS:
+            return True
+    return False
+
 
 def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols: list):
     q = question.lower().strip()
@@ -27,6 +50,8 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
         "sort_order": None,
         "limit": None,
         "columns_to_select": [],
+        "filter": None,
+        "entity": None,
     }
 
     # 1. COUNT detection
@@ -83,9 +108,10 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
                     break
             break
 
-    # 1.5 "Which <dim> has the <highest|lowest> <metric>?"
+    # 1.5 "Which <dim> has/had the <highest|lowest> <metric>?" plus count-ranking
+    #     forms like "Which <dim> have the most <entity>?" (see 1.6 too).
     if intent["intent_type"] == "list":
-        m = re.search(r"\b(?:which|what)\s+(.+?)\s+(?:has|have)\s+(?:the\s+)?(highest|lowest|most|least|largest|smallest|top|maximum|minimum|best|worst)\s+(.+)$", q)
+        m = re.search(r"\b(?:which|what)\s+(.+?)\s+(?:has|have|had|got|sold|ordered|recorded|generated|received)\s+(?:the\s+)?(highest|lowest|most|least|largest|smallest|top|maximum|minimum|best|worst)\s+(.+)$", q)
         if m:
             dim_phrase = m.group(1).strip().rstrip("?").strip()
             qualifier = m.group(2)
@@ -109,9 +135,9 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
                     break
             if not intent["group_col"] and len(cat_cols) == 1:
                 intent["group_col"] = cat_cols[0]
-            if not intent["agg_col"] and len(metric_cols) == 1:
+            if not intent["agg_col"] and len(metric_cols) == 1 and _mentions_metric(metric_phrase):
                 intent["agg_col"] = metric_cols[0]
-            if not intent["agg_col"] and metric_cols:
+            elif not intent["agg_col"] and metric_cols and _mentions_metric(metric_phrase):
                 intent["agg_col"] = _preferred_metric(metric_cols)
             if intent["agg_col"] and intent["group_col"]:
                 intent["intent_type"] = "ranking"
@@ -120,6 +146,60 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
                 intent["sort_order"] = "DESC" if qualifier in ("highest", "most", "largest", "top", "maximum", "best") else "ASC"
                 intent["agg_func"] = intent["agg_func"] or "SUM"
                 intent["is_aggregation_rank"] = True
+            elif intent["group_col"] and qualifier in ("most", "least"):
+                # "Which <dim> have the most <entity>?" where the entity is not a
+                # metric column -> count records grouped by the dimension.
+                intent["intent_type"] = "count"
+                intent["is_ranking"] = True
+                intent["is_aggregation"] = True
+                intent["is_count_query"] = True
+                intent["agg_func"] = "COUNT"
+                intent["entity"] = f"{_simple_stem(metric_phrase) or _simple_stem(intent['group_col'])}_count"
+                intent["limit"] = None
+                intent["sort_order"] = "DESC" if qualifier in ("highest", "most", "largest", "top", "maximum", "best") else "ASC"
+
+    # 1.6 Natural-language ranking/count variations:
+    #   "Which products sold the most?"            -> count grouped by product
+    #   "What are the best-selling products?"      -> count grouped by product
+    #   "Which city had the most orders?"          -> count grouped by city
+    if intent["intent_type"] == "list":
+        # (a) question ends at "the most|least" (entity already implied by the
+        #     subject dimension): "Which products sold the most?"
+        m = re.search(r"\b(?:which|what)\s+(.+?)\s+(?:sold|ordered|occurred|appeared|recorded|generated|received|has|have|had)\s+(?:the\s+)?(most|least)\s*$", q)
+        if m:
+            dim_phrase = m.group(1).strip()
+            qualifier = m.group(2)
+            for w in re.findall(r"\w+", dim_phrase):
+                intent["group_col"] = _match_col(w, text_cols) or _match_col(w, col_names)
+                if intent["group_col"]:
+                    break
+            if intent["group_col"]:
+                intent["intent_type"] = "count"
+                intent["is_ranking"] = True
+                intent["is_aggregation"] = True
+                intent["is_count_query"] = True
+                intent["agg_func"] = "COUNT"
+                intent["entity"] = f"{_simple_stem(intent['group_col'])}_count"
+                intent["limit"] = None
+                intent["sort_order"] = "DESC" if qualifier == "most" else "ASC"
+
+        # (b) "best-selling <entity>" / "most popular <entity>" / "most common <entity>"
+        m = re.search(r"(?:best[- ]?selling|most\s+popular|most\s+common|most\s+frequent)\s+([A-Za-z][A-Za-z\s'-]*?)\s*$", q)
+        if m:
+            entity_phrase = m.group(1).strip()
+            for w in re.findall(r"\w+", entity_phrase):
+                intent["group_col"] = _match_col(w, text_cols) or _match_col(w, col_names)
+                if intent["group_col"]:
+                    break
+            if intent["group_col"]:
+                intent["intent_type"] = "count"
+                intent["is_ranking"] = True
+                intent["is_aggregation"] = True
+                intent["is_count_query"] = True
+                intent["agg_func"] = "COUNT"
+                intent["entity"] = f"{_simple_stem(intent['group_col']) or _simple_stem(entity_phrase)}_count"
+                intent["limit"] = 10
+                intent["sort_order"] = "DESC"
 
     # 2. COMPARISON: "compare X across Y", "X comparison by Y"
     if intent["intent_type"] == "list":
@@ -174,20 +254,24 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
                 intent['is_aggregation'] = True
                 intent['sort_order'] = 'DESC'
 
-    # 3. RANKING: "top N X by Y", "rank X by Y", "bottom N X by Y"
+    # 3. RANKING: "top N X by Y", "rank X by Y", "bottom N X by Y", "top X"
     if intent['intent_type'] == 'list':
         rank_match = re.search(r'(?:top|bottom|rank(?:ed)?|best|worst|highest|lowest)\s+(\d+)?\s*(.+?)\s+by\s+(.+)', q)
         if not rank_match:
             rank_match = re.search(r'(?:top|bottom|rank(?:ed)?|best|worst|highest|lowest)\s+(\d+)\s+(.+)', q)
+        if not rank_match:
+            # "What are the top products?" (no rank number, no metric) -> the
+            # entity phrase is the whole tail; ranking then falls back to count.
+            rank_match = re.search(r'\b(?:top|best|leading)\s+([A-Za-z][A-Za-z0-9_\s\'\-]*?)\s*$', q)
 
         if rank_match:
-            limit_str = rank_match.group(1)
-            entity_phrase = rank_match.group(2).strip()
+            limit_str = rank_match.group(1) if rank_match.lastindex and rank_match.lastindex >= 2 else None
+            entity_phrase = rank_match.group(2).strip() if rank_match.lastindex and rank_match.lastindex >= 2 else rank_match.group(1).strip()
             metric_phrase = rank_match.group(3).strip() if rank_match.lastindex and rank_match.lastindex >= 3 else entity_phrase
 
             intent['intent_type'] = 'ranking'
             intent['is_ranking'] = True
-            intent['limit'] = int(limit_str) if limit_str else 10
+            intent['limit'] = int(limit_str) if limit_str and limit_str.isdigit() else 10
 
             if any(w in q for w in ['top', 'best', 'highest', 'largest']):
                 intent['sort_order'] = 'DESC'
@@ -208,8 +292,21 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
                     if intent['group_col']:
                         break
 
+            if intent['group_col'] and intent['agg_col'] and intent['group_col'] == intent['agg_col']:
+                # "top 5 by revenue" resolves group and metric to the same column;
+                # that is a plain sort, not a grouping.
+                intent['group_col'] = None
+
             if intent['group_col'] and not intent['agg_col'] and numeric_cols:
                 intent['agg_col'] = numeric_cols[0]
+            elif intent['group_col'] and not intent['agg_col']:
+                # "Top products" with no usable metric column -> rank by record
+                # count grouped by the entity's dimension.
+                intent['intent_type'] = 'count'
+                intent['is_count_query'] = True
+                intent['agg_func'] = 'COUNT'
+                intent['is_aggregation'] = True
+                intent['entity'] = f"{_simple_stem(intent['group_col']) or _simple_stem(entity_phrase)}_count"
 
     # 4. AGGREGATION (non-comparison)
     if intent['intent_type'] == 'list':
@@ -234,7 +331,10 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
             if not intent['agg_col'] and numeric_cols:
                 intent['agg_col'] = numeric_cols[0]
 
-    # 5. GROUP BY detection
+    # 5. GROUP BY detection. Only for list/count/aggregation intents that have not
+    #    already resolved a dimension: ranking/comparison intents resolve their own
+    #    group column (e.g. "top 10 products by revenue" groups by product, and the
+    #    trailing "by revenue" is the metric, NOT the group dimension).
     group_phrases = [
         r"by\s+(\w+(?:\s+\w+)*)\s*$",
         r"per\s+(\w+(?:\s+\w+)*)",
@@ -244,19 +344,20 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
         r"distribution\s+(?:by|of|per)\s+(\w+(?:\s+\w+)*)",
         r"group by\s+(\w+(?:\s+\w+)*)",
     ]
-    for phrase in group_phrases:
-        m = re.search(phrase, q)
-        if m:
-            group_target = m.group(1).strip()
-            intent["group_by_phrase"] = group_target
-            for c in col_names:
-                if c.lower() == group_target or c.lower().replace("_", " ") == group_target:
-                    intent["group_col"] = c
+    if intent["intent_type"] in ("list", "count", "aggregation") and not intent["group_col"]:
+        for phrase in group_phrases:
+            m = re.search(phrase, q)
+            if m:
+                group_target = m.group(1).strip()
+                intent["group_by_phrase"] = group_target
+                for c in col_names:
+                    if c.lower() == group_target or c.lower().replace("_", " ") == group_target:
+                        intent["group_col"] = c
+                        break
+                if not intent["group_col"] and len(cat_cols) == 1:
+                    intent["group_col"] = cat_cols[0]
+                if intent["group_col"]:
                     break
-            if not intent["group_col"] and len(cat_cols) == 1:
-                intent["group_col"] = cat_cols[0]
-            if intent["group_col"]:
-                break
 
     # Implicit aggregation: "show spending by category" -> SUM of the metric.
     # Only upgrade list intents; never override an explicit ranking/comparison/etc.
@@ -310,4 +411,76 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
     if any(w in q for w in ["all", "everything", "show me all", "list all"]):
         intent["is_list_all"] = True
 
+    # 12. Numeric filter (WHERE): "customers with revenue above 10000",
+    #     "find products priced less than 50", "revenue > 10000".
+    filter_info = _extract_numeric_filter(q, col_names, metric_cols)
+    if filter_info:
+        intent["filter"] = filter_info
+
     return intent
+
+
+# Word/phrase -> SQL comparison operator for numeric filters.
+_FILTER_WORD_OPS = [
+    ("greater than or equal to", ">="),
+    ("less than or equal to", "<="),
+    ("greater than", ">"),
+    ("less than", "<"),
+    ("more than", ">"),
+    ("fewer than", "<"),
+    ("at least", ">="),
+    ("at most", "<="),
+    ("above", ">"),
+    ("over", ">"),
+    ("exceeding", ">"),
+    ("exceeds", ">"),
+    ("beyond", ">"),
+    ("below", "<"),
+    ("under", "<"),
+    ("equal to", "="),
+    ("equals", "="),
+]
+
+
+def _extract_numeric_filter(q: str, col_names: list, numeric_cols: list):
+    """Extract a single numeric comparison filter, or None.
+
+    Handles both word operators ("revenue above 10000", "above 10000") and
+    symbol operators ("revenue > 10000", "> 10000"). The target column is the
+    one mentioned with the comparison, falling back to the preferred metric.
+    """
+    val = r"(\d[\d,]*(?:\.\d+)?)"
+
+    def _resolve(col_word: str):
+        if col_word:
+            for c in col_names:
+                if c.lower() == col_word or c.lower().replace("_", " ") == col_word:
+                    return c
+            for c in numeric_cols:
+                if c.lower() in col_word or _simple_stem(c.lower()) in col_word or col_word in c.lower():
+                    return c
+        return _preferred_metric(numeric_cols) or (numeric_cols[0] if numeric_cols else None)
+
+    for op_word, op in _FILTER_WORD_OPS:
+        m = re.search(rf"\b(?P<col>[a-z][a-z0-9_ ]+?)\s+{re.escape(op_word)}\s+{val}\b", q)
+        if m:
+            col = _resolve(m.group("col").strip())
+            if col:
+                return {"column": col, "op": op, "value": float(m.groups()[-1].replace(",", ""))}
+        m = re.search(rf"\b{re.escape(op_word)}\s+{val}\b", q)
+        if m:
+            col = _resolve("")
+            if col:
+                return {"column": col, "op": op, "value": float(m.groups()[-1].replace(",", ""))}
+
+    m = re.search(rf"\b(?P<col>[a-z][a-z0-9_ ]+?)\s*(?P<op>>=|<=|>|<)\s*{val}\b", q)
+    if m:
+        col = _resolve(m.group("col").strip())
+        if col:
+            return {"column": col, "op": m.group("op"), "value": float(m.groups()[-1].replace(",", ""))}
+    m = re.search(rf"\b(?P<op>>=|<=|>|<)\s*{val}\b", q)
+    if m:
+        col = _resolve("")
+        if col:
+            return {"column": col, "op": m.group("op"), "value": float(m.groups()[-1].replace(",", ""))}
+    return None

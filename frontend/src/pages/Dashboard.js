@@ -418,6 +418,7 @@ const Dashboard = () => {
                   chartConfig={queryResult.chart_config}
                   intentType={detectIntentType(queryResult.question)}
                   currency={queryResult.currency}
+                  semanticTypes={queryResult.semantic_types}
                 />
 
                 {queryResult.generated_sql && (

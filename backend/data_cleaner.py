@@ -8,19 +8,28 @@ from sql_validator import sanitize_column_name
 
 
 def read_uploaded_file(file_content: bytes, filename: str) -> pd.DataFrame:
-    """Read uploaded file and return a pandas DataFrame."""
+    """Read uploaded file and return a pandas DataFrame.
+
+    Supports CSV / TSV / JSON / XLSX / XLS / PDF. Excel workbooks with multiple
+    sheets are inspected and the most data-rich sheet is used (headers, blank
+    rows and blank columns are handled); nothing assumes a fixed sheet order.
+    """
     ext = filename.rsplit(".", 1)[-1].lower()
 
     try:
         if ext == "csv":
-            df = pd.read_csv(io.BytesIO(file_content))
+            df = _read_delimiter(file_content, ",")
+        elif ext == "tsv":
+            df = _read_delimiter(file_content, "\t")
+        elif ext == "json":
+            df = _read_json(file_content)
         elif ext == "xlsx":
-            df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl")
+            df = _read_excel_best_sheet(file_content, engine="openpyxl")
         elif ext == "xls":
             try:
-                df = pd.read_excel(io.BytesIO(file_content), engine="xlrd")
+                df = _read_excel_best_sheet(file_content, engine="xlrd")
             except Exception:
-                df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl")
+                df = _read_excel_best_sheet(file_content, engine="openpyxl")
         elif ext == "pdf":
             df = extract_pdf_tables(file_content)
         else:
@@ -34,6 +43,59 @@ def read_uploaded_file(file_content: bytes, filename: str) -> pd.DataFrame:
         raise HTTPException(status_code=400, detail="Uploaded file contains no data")
 
     return df
+
+
+def _read_delimiter(file_content: bytes, sep: str) -> pd.DataFrame:
+    """Read a delimited file (CSV/TSV), tolerating common encodings."""
+    try:
+        return pd.read_csv(io.BytesIO(file_content), sep=sep, encoding="utf-8")
+    except UnicodeDecodeError:
+        return pd.read_csv(io.BytesIO(file_content), sep=sep, encoding="latin-1")
+
+
+def _read_json(file_content: bytes) -> pd.DataFrame:
+    """Read JSON as a list of records or a common record-oriented wrapper."""
+    data = json.loads(file_content.decode("utf-8"))
+    if isinstance(data, list) and data:
+        return pd.DataFrame(data)
+    if isinstance(data, dict):
+        for key in ("data", "records", "rows", "values", "items"):
+            if isinstance(data.get(key), list) and data[key]:
+                return pd.DataFrame(data[key])
+        try:
+            return pd.DataFrame.from_dict(data)
+        except Exception:
+            pass
+    raise HTTPException(
+        status_code=400,
+        detail="JSON must be an array of objects or an object with a 'data'/'records' array.",
+    )
+
+
+def _read_excel_best_sheet(file_content: bytes, engine: str) -> pd.DataFrame:
+    """Pick the most data-rich worksheet from an Excel workbook.
+
+    Inspects every sheet, drops fully-empty rows/columns per sheet and selects
+    the sheet with the most data rows (columns as a tiebreaker). This keeps
+    first-sheet behaviour for single-sheet workbooks while handling multi-sheet
+    files intelligently.
+    """
+    xls = pd.ExcelFile(io.BytesIO(file_content), engine=engine)
+    best_df, best_score = None, (-1, -1)
+    for sheet in xls.sheet_names:
+        try:
+            df = pd.read_excel(xls, sheet_name=sheet)
+        except Exception:
+            continue
+        if df.empty:
+            continue
+        df = df.dropna(how="all").dropna(axis=1, how="all")
+        score = (len(df), len(df.columns))
+        if score[0] > best_score[0] or (score[0] == best_score[0] and score[1] > best_score[1]):
+            best_df, best_score = df, score
+    if best_df is None:
+        raise HTTPException(status_code=400, detail="Workbook contains no readable data")
+    return best_df
 
 
 def extract_pdf_tables(content: bytes) -> pd.DataFrame:
@@ -71,6 +133,64 @@ def extract_pdf_tables(content: bytes) -> pd.DataFrame:
 
     # Fallback: return text lines as single-column DataFrame
     return pd.DataFrame({"content": lines[1:]})
+
+
+def assess_data_quality(df: pd.DataFrame) -> dict:
+    """Summarise data-quality signals on the raw (pre-clean) frame.
+
+    Non-blocking by design: the report is informational and the pipeline still
+    analyses the cleaned dataset even when issues exist. Detects duplicate rows,
+    fully blank rows/columns, missing cells, constant columns, columns with a
+    majority of unparseable dates and encoding replacement characters.
+    """
+    warnings = []
+    total_rows = len(df)
+    dup_rows = int(df.duplicated().sum()) if total_rows else 0
+    blank_rows = int(df.isna().all(axis=1).sum()) if total_rows else 0
+    blank_cols = [str(c) for c in df.columns if df[c].isna().all()]
+    missing_cells = int(df.isna().sum().sum())
+
+    column_issues = []
+    for col in df.columns:
+        col_warnings = []
+        null_count = int(df[col].isna().sum())
+        if null_count:
+            pct = null_count / total_rows * 100 if total_rows else 0
+            col_warnings.append(f"{pct:.0f}% missing")
+        if df[col].nunique(dropna=True) <= 1:
+            col_warnings.append("constant value")
+        if df[col].dtype == "object" and total_rows:
+            sample = df[col].dropna().astype(str)
+            if len(sample) > 5:
+                parsed = pd.to_datetime(sample, errors="coerce")
+                if parsed.isna().mean() > 0.5:
+                    col_warnings.append("mixed/unparseable values")
+            repl = sample.str.contains("\ufffd").sum()
+            if repl:
+                col_warnings.append("encoding replacement characters")
+        if col_warnings:
+            column_issues.append({"column": str(col), "issues": col_warnings})
+
+    if dup_rows:
+        warnings.append(f"{dup_rows:,} duplicate row(s) removed during cleaning")
+    if blank_rows:
+        warnings.append(f"{blank_rows:,} fully blank row(s) removed during cleaning")
+    if blank_cols:
+        warnings.append(f"{len(blank_cols)} fully blank column(s) removed during cleaning")
+    if missing_cells:
+        warnings.append(f"{missing_cells:,} missing cell(s) imputed during cleaning")
+
+    return {
+        "row_count": total_rows,
+        "column_count": len(df.columns),
+        "duplicate_rows": dup_rows,
+        "blank_rows": blank_rows,
+        "blank_columns": blank_cols,
+        "missing_cells": missing_cells,
+        "column_issues": column_issues,
+        "warnings": warnings,
+        "issues_count": len(column_issues) + (1 if dup_rows else 0) + (1 if missing_cells else 0),
+    }
 
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -154,7 +274,13 @@ def classify_column(col_name: str, dtype, nunique: int, total_rows: int, sample_
     if "date" in low or "time" in low or dtype == "datetime64[ns]":
         return "date"
     if dtype in ("float64", "int64"):
-        if nunique == total_rows and nunique > 10:
+        # A fully-unique integer column is only ID-like when its name gives no
+        # signal that it is a real measure (revenue/amount/... must stay metric).
+        metric_hints = ("revenue", "sales", "amount", "price", "cost", "expense", "spend", "profit",
+                        "income", "salary", "units", "quantity", "qty", "count", "score", "rating",
+                        "total", "sum", "avg", "value", "margin", "share", "rate", "ratio", "volume",
+                        "gross", "net", "budget", "payout", "fee", "weight", "size", "year", "age")
+        if nunique == total_rows and nunique > 10 and not any(h in low for h in metric_hints):
             return "id"
         return "metric"
     if dtype == "object" or dtype == "string" or dtype == "str":

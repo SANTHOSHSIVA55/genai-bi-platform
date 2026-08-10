@@ -171,11 +171,106 @@ def _normalized(q: str) -> str:
     return re.sub(r"[^a-z0-9]", "", q.lower())
 
 
+# Words that denote money; entity extraction must never treat a monetary
+# noun (e.g. "spending" in "highest total spending") as a countable entity.
+_MONETARY_ENTITY_WORDS = (
+    "total", "amount", "spending", "spent", "revenue", "sales", "price",
+    "cost", "profit", "salary", "income", "value", "sum", "expense",
+)
+
+_GROUPABLE_TEXT_HINTS = (
+    "city", "country", "region", "state", "province", "location", "area",
+    "zone", "district", "county", "territory", "place", "branch",
+)
+
+
+def _pluralize(word: str) -> str:
+    w = word.strip()
+    if not w:
+        return w
+    if w.lower().endswith(("s", "x", "z", "ch", "sh")):
+        return w + "es"
+    if w.lower().endswith("y") and len(w) > 1 and w[-2].lower() not in "aeiou":
+        return w[:-1] + "ies"
+    return w + "s"
+
+
+def _singularize(word: str) -> str:
+    w = word.strip()
+    if not w:
+        return w
+    low = w.lower()
+    if low.endswith("ies") and len(w) > 3:
+        return w[:-3] + "y"
+    if low.endswith("ses") and len(w) > 3:
+        return w[:-2]
+    if low.endswith("s") and not low.endswith("ss") and len(w) > 3:
+        return w[:-1]
+    return w
+
+
+def extract_entity(question: str) -> str:
+    """Extract the countable noun a ranking question asks about.
+
+    "Which cities have the most suppliers?" -> "suppliers"
+    "What are the best-selling products?"   -> "products"
+    "Which products sold the most?"         -> "products"
+    Returns "" when the noun is a monetary metric or cannot be determined.
+    """
+    question = (question or "").strip().rstrip("!?.")
+    m = re.search(
+        r"\b(?:most|highest|lowest|least)\s+(?:of\s+)?([A-Za-z][A-Za-z\s'-]{1,24}?)\s*$",
+        question.lower(),
+    )
+    if not m:
+        m = re.search(
+            r"(?:best[-\s]?selling|most\s+popular|most\s+common|most\s+frequent)\s+([A-Za-z][A-Za-z\s'-]{1,24}?)\s*$",
+            question.lower(),
+        )
+    if not m:
+        m = re.search(
+            r"^(?:which|what)\s+([A-Za-z][A-Za-z\s'-]{1,24}?)\s+(?:sold|ordered|occurred|appeared|recorded|generated|received|has|have|had)\s+(?:the\s+)?(?:most|least)\s*$",
+            question.lower(),
+        )
+    if not m:
+        return ""
+    entity = m.group(1).strip().strip("'")
+    if not entity or any(w in entity for w in _MONETARY_ENTITY_WORDS):
+        return ""
+    return entity
+
+
+def _is_groupable_text(name: str) -> bool:
+    low = name.lower()
+    return any(h in low for h in _GROUPABLE_TEXT_HINTS)
+
+
+def _grouping_dimensions(groups: dict) -> list:
+    """Categorical columns plus low-cardinality text columns (e.g. city,
+    country) that are sensible GROUP BY keys. Grounded in the real schema."""
+    dims = list(groups.get("categorical") or [])
+    for t in groups.get("text") or []:
+        if t not in dims and (_is_groupable_text(t)):
+            dims.append(t)
+    return dims
+
+
+def _asked_dimension(question: str, dims: list) -> str:
+    """Find the dimension the question is grouping by ('' if none)."""
+    q = question.lower()
+    for d in dims:
+        singular = _singularize(d)
+        plural = _pluralize(d)
+        if singular.lower() in q or plural.lower() in q or d.lower() in q:
+            return d
+    return ""
+
+
 def _current_theme(question: str) -> str:
     q = question.lower()
     if any(w in q for w in ("trend", "over time", "monthly", "weekly", "daily", "yearly", "timeline")):
         return "trend"
-    if any(w in q for w in ("top ", "top5", "top 5", "top 10", "bottom", "rank", "best", "worst", "highest", "lowest")):
+    if any(w in q for w in ("top ", "top5", "top 5", "top 10", "bottom", "rank", "best", "worst", "highest", "lowest", "most", "least")):
         return "ranking"
     if any(w in q for w in ("compare", "comparison", "across", "vs", "versus")):
         return "comparison"
@@ -215,7 +310,26 @@ def generate_follow_ups(question: str, cols_meta: list) -> list:
         add(f"Show {metric or 'metrics'} by {dimension}." if dimension else f"Show {metric or 'all metrics'} over time.")
         add(f"What is the total {metric}?" if metric else "What are the total records?")
     elif theme == "ranking":
-        if metric and dimension:
+        entity = extract_entity(question)
+        dims = _grouping_dimensions(groups)
+        asked = _asked_dimension(question, dims)
+        others = [d for d in dims if d != asked] if asked else dims
+        counts = metric and "count" in metric.lower()
+        if entity or counts:
+            ent_plural = entity or (metric.replace("_count", "s") if metric else "records")
+            ent_singular = _singularize(ent_plural)
+            if others:
+                add(f"Which {others[0]} has the most {ent_plural}?")
+                add(f"How many {ent_plural} are in each {others[0]}?")
+                add(f"Show {ent_singular} distribution by {others[0]}.")
+            if asked:
+                add(f"Which {asked} has the most {ent_plural}?")
+            if others:
+                top_vals = _top_values(cols_meta, others[0])
+                if top_vals:
+                    add(f"How many {ent_plural} are in {top_vals[0]}?")
+            add(f"What is the total number of {ent_plural}?")
+        elif metric and dimension:
             add(f"What percentage of total {metric} does the top {dimension} represent?")
             add(f"Show all {dimension} ranked by {metric}.")
             add(f"How does the top {dimension} compare with the second-highest?")
