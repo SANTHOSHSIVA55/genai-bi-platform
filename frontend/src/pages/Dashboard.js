@@ -7,13 +7,15 @@ import {
   ChevronDown, ChevronUp, Code, Brain,
   Download, FileJson, Table2
 } from 'lucide-react';
-import { getDatasets, getQueryHistory, executeQuery } from '../api/api';
+import { getDatasets, getQueryHistory, executeQuery, getDatasetProfile } from '../api/api';
 import { DashboardScene } from '../components/Scene3D';
 import KPICards from '../components/KPICards';
 import QueryInput from '../components/QueryInput';
 import ChartDisplay from '../components/ChartDisplay';
 import SummaryPanel from '../components/SummaryPanel';
 import AIQualityBadge from '../components/AIQualityBadge';
+import PipelineStages from '../components/PipelineStages';
+import DatasetProfile from '../components/DatasetProfile';
 import ErrorPanel from '../components/ErrorPanel';
 import DatasetPreviewModal from '../components/DatasetPreviewModal';
 import { exportCsv, downloadJson } from '../utils/export';
@@ -110,6 +112,9 @@ const Dashboard = () => {
   const [error, setError] = useState(null);
   const [previewTarget, setPreviewTarget] = useState(null);
   const [prefill, setPrefill] = useState(null);
+  const [activeDatasetId, setActiveDatasetId] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
   const lastDatasetId = useRef(null);
 
   useEffect(() => {
@@ -133,6 +138,7 @@ const Dashboard = () => {
       setError(null);
       if (ds.length > 0 && !lastDatasetId.current) {
         lastDatasetId.current = ds[0].id;
+        setActiveDatasetId(ds[0].id);
       }
     } catch (err) {
       console.warn('Could not fetch initial data:', err);
@@ -149,11 +155,27 @@ const Dashboard = () => {
     fetchData();
   }, [fetchData]);
 
+  // Auto-insights profile for the active dataset
+  useEffect(() => {
+    if (!activeDatasetId) {
+      setProfile(null);
+      return;
+    }
+    let cancelled = false;
+    setProfileLoading(true);
+    getDatasetProfile(activeDatasetId)
+      .then((res) => { if (!cancelled) setProfile(res.data); })
+      .catch(() => { if (!cancelled) setProfile(null); })
+      .finally(() => { if (!cancelled) setProfileLoading(false); });
+    return () => { cancelled = true; };
+  }, [activeDatasetId]);
+
   const handleQuery = async (queryData) => {
     setLoading(true);
     setQueryResult(null);
     setError(null);
     lastDatasetId.current = queryData.dataset_id || lastDatasetId.current;
+    if (queryData.dataset_id) setActiveDatasetId(queryData.dataset_id);
     try {
       const res = await executeQuery(queryData);
       setQueryResult(res.data);
@@ -335,6 +357,10 @@ const Dashboard = () => {
                   <AIQualityBadge quality={queryResult.ai_quality} />
                 )}
 
+                {queryResult.pipeline_stages && queryResult.pipeline_stages.length > 0 && (
+                  <PipelineStages stages={queryResult.pipeline_stages} />
+                )}
+
                 {queryResult.validation_info && !queryResult.validation_info.valid && (
                   <ErrorPanel
                     question={queryResult.question}
@@ -370,6 +396,7 @@ const Dashboard = () => {
                   data={queryResult.data}
                   chartConfig={queryResult.chart_config}
                   intentType={detectIntentType(queryResult.question)}
+                  currency={queryResult.currency}
                 />
 
                 {queryResult.generated_sql && (
@@ -443,6 +470,14 @@ const Dashboard = () => {
                 )}
               </div>
             </motion.div>
+
+            {activeDatasetId && (
+              <DatasetProfile
+                profile={profile}
+                loading={profileLoading}
+                datasetName={datasets.find((d) => d.id === activeDatasetId)?.name}
+              />
+            )}
 
             <motion.div
               initial={{ opacity: 0, y: 16 }}

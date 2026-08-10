@@ -1,0 +1,11 @@
+product,category,revenue,units_sold,sale_date
+Widget A,Electronics,125000,3200,2024-01-01
+Widget B,Home Office,98000,2800,2024-01-05
+Widget C,Electronics,87000,2100,2024-01-10
+Widget D,Home Office,72000,1900,2024-01-15
+Widget E,Furniture,65000,1700,2024-01-20
+Widget F,Furniture,54000,1400,2024-01-25
+Widget G,Home Office,43000,1100,2024-01-28
+Widget H,Electronics,38000,900,2024-01-30
+Widget I,Furniture,25000,600,2024-02-02
+Widget J,Electronics,15000,400,2024-02-05

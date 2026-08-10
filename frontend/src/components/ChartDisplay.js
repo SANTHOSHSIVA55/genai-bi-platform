@@ -27,7 +27,7 @@ const KPI_ICONS = {
   total: Database,
 };
 
-const renderKpiGrid = (data, title) => {
+const renderKpiGrid = (data, title, currency, money) => {
   if (!data || data.length === 0) return null;
   const row = data[0];
   const entries = Object.entries(row).filter(([_, v]) => v != null);
@@ -41,7 +41,7 @@ const renderKpiGrid = (data, title) => {
           const Icon = iconKey ? KPI_ICONS[iconKey] : Hash;
           const isNumeric = typeof val === 'number';
           const displayVal = isNumeric
-            ? (Number.isInteger(val) ? val.toLocaleString() : Number(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+            ? (currency ? money(val) : (Number.isInteger(val) ? val.toLocaleString() : Number(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })))
             : String(val);
           const label = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
           return (
@@ -72,6 +72,15 @@ const formatNumber = (val) => {
   return num % 1 === 0 ? num.toLocaleString() : num.toFixed(2);
 };
 
+// Professional money formatting; currency symbol is shown only when the backend
+// could determine it from the dataset (e.g. ₹). Otherwise plain 3,983.00.
+const makeMoneyFormatter = (currency) => (val) => {
+  if (val == null || val === '' || isNaN(Number(val))) return formatNumber(val);
+  const num = Number(val);
+  const formatted = num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return currency ? `${currency}${formatted}` : formatted;
+};
+
 const smartAxisKey = (data, columns, preferred) => {
   if (preferred && columns.includes(preferred)) return preferred;
   if (preferred) {
@@ -81,11 +90,13 @@ const smartAxisKey = (data, columns, preferred) => {
   return columns[0] || '';
 };
 
-const ChartDisplay = ({ data, chartConfig, intentType }) => {
+const ChartDisplay = ({ data, chartConfig, intentType, currency }) => {
   const safeData = useMemo(() => {
     if (!data || !Array.isArray(data) || data.length === 0) return [];
     return data.filter(row => row && typeof row === 'object');
   }, [data]);
+
+  const money = makeMoneyFormatter(currency);
 
   if (safeData.length === 0 || !chartConfig) return null;
 
@@ -116,7 +127,7 @@ const ChartDisplay = ({ data, chartConfig, intentType }) => {
           </h3>
           <span className="text-xs px-3 py-1 rounded-full bg-dark-700/50 text-dark-400 uppercase tracking-wider">Analysis</span>
         </div>
-        {renderKpiGrid(safeData, chartConfig.description || '')}
+        {renderKpiGrid(safeData, chartConfig.description || '', currency, money)}
       </motion.div>
     );
   }
@@ -137,7 +148,7 @@ const ChartDisplay = ({ data, chartConfig, intentType }) => {
             <Target className="w-5 h-5 text-primary-400" />
           </div>
         </div>
-        <div className="kpi-value">{formatNumber(kpiValue)}</div>
+        <div className="kpi-value">{currency ? money(kpiValue) : formatNumber(kpiValue)}</div>
         <div className="mt-2 flex items-center gap-1.5">
           <div className="w-1.5 h-1.5 rounded-full bg-apple-green" />
           <span className="text-[11px] text-dark-500">
@@ -166,7 +177,7 @@ const ChartDisplay = ({ data, chartConfig, intentType }) => {
         {payload.map((entry, i) => (
           <p key={i} className="text-sm flex justify-between gap-4" style={{ color: entry.color }}>
             <span className="truncate">{entry.name}:</span>
-            <span className="font-semibold whitespace-nowrap">{formatNumber(entry.value)}</span>
+            <span className="font-semibold whitespace-nowrap">{currency ? money(entry.value) : formatNumber(entry.value)}</span>
           </p>
         ))}
       </div>
@@ -175,6 +186,7 @@ const ChartDisplay = ({ data, chartConfig, intentType }) => {
 
   const tickStyle = { fill: '#8e8e93', fontSize: 11, fontFamily: 'Inter, sans-serif' };
   const gridStyle = { strokeDasharray: '3 3', stroke: '#2c2c2e' };
+  const axisTick = (v) => (currency ? currency + formatNumber(v) : formatNumber(v));
 
   const renderBarChart = () => {
     const isHorizontal = isRanking && safeData.length <= 20;
@@ -185,7 +197,7 @@ const ChartDisplay = ({ data, chartConfig, intentType }) => {
         <ResponsiveContainer width="100%" height={Math.max(200, sorted.length * 36)}>
           <BarChart data={sorted} layout="vertical" margin={{ top: 10, right: 30, left: 100, bottom: 10 }}>
             <CartesianGrid {...gridStyle} horizontal={false} />
-            <XAxis type="number" tick={tickStyle} tickFormatter={formatNumber} />
+            <XAxis type="number" tick={tickStyle} tickFormatter={axisTick} />
             <YAxis dataKey={xKey} type="category" tick={tickStyle} width={90} tickLine={false} axisLine={false} />
             <Tooltip content={<CustomTooltip />} />
             <Bar dataKey={yKey} fill="url(#barGrad)" radius={[0, 4, 4, 0]} maxBarSize={24} />
@@ -205,7 +217,7 @@ const ChartDisplay = ({ data, chartConfig, intentType }) => {
         <BarChart data={safeData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
           <CartesianGrid {...gridStyle} />
           <XAxis dataKey={xKey} tick={tickStyle} angle={safeData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
-          <YAxis tick={tickStyle} tickFormatter={formatNumber} />
+          <YAxis tick={tickStyle} tickFormatter={axisTick} />
           <Tooltip content={<CustomTooltip />} />
           <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
           {hasMultiY ? (
@@ -231,7 +243,7 @@ const ChartDisplay = ({ data, chartConfig, intentType }) => {
       <LineChart data={safeData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
         <CartesianGrid {...gridStyle} />
         <XAxis dataKey={xKey} tick={tickStyle} angle={safeData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
-        <YAxis tick={tickStyle} tickFormatter={formatNumber} />
+        <YAxis tick={tickStyle} tickFormatter={axisTick} />
         <Tooltip content={<CustomTooltip />} />
         <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
         {hasMultiY ? (
@@ -254,7 +266,7 @@ const ChartDisplay = ({ data, chartConfig, intentType }) => {
       <AreaChart data={safeData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
         <CartesianGrid {...gridStyle} />
         <XAxis dataKey={xKey} tick={tickStyle} angle={safeData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
-        <YAxis tick={tickStyle} tickFormatter={formatNumber} />
+        <YAxis tick={tickStyle} tickFormatter={axisTick} />
         <Tooltip content={<CustomTooltip />} />
         <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
         {hasMultiY ? (
@@ -313,7 +325,9 @@ const ChartDisplay = ({ data, chartConfig, intentType }) => {
               <tr key={i} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
                 {columns.map((col) => (
                   <td key={col} className="px-4 py-3 text-dark-200">
-                    {typeof row[col] === 'number' ? formatNumber(row[col]) : (row[col] != null ? String(row[col]) : '\u2014')}
+                    {typeof row[col] === 'number'
+                      ? (currency ? money(row[col]) : formatNumber(row[col]))
+                      : (row[col] != null ? String(row[col]) : '\u2014')}
                   </td>
                 ))}
               </tr>

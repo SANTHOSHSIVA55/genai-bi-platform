@@ -1,11 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Search, Sparkles, Loader2, ChevronDown, Database } from 'lucide-react';
+import { Search, Sparkles, Loader2, ChevronDown, Database, Lightbulb } from 'lucide-react';
+import { getDatasetQuestions } from '../api/api';
 
 const QueryInput = ({ datasets, onSubmit, loading, initialQuestion = '', initialDatasetId = null }) => {
   const [question, setQuestion] = useState(initialQuestion);
   const [selectedDataset, setSelectedDataset] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
+  const [questions, setQuestions] = useState({ overview: [], category: [], insights: [] });
+  const [questionsLoading, setQuestionsLoading] = useState(false);
   const initialQuestionRef = useRef(initialQuestion);
 
   // Auto-select first dataset when datasets load
@@ -27,26 +30,51 @@ const QueryInput = ({ datasets, onSubmit, loading, initialQuestion = '', initial
     }
   }, [initialQuestion]);
 
+  // Schema-aware quick questions for the selected dataset
+  const loadQuestions = useCallback(async (datasetId) => {
+    if (!datasetId) return;
+    setQuestionsLoading(true);
+    try {
+      const res = await getDatasetQuestions(datasetId);
+      const q = res.data || {};
+      setQuestions({
+        overview: q.overview || [],
+        category: q.category || [],
+        insights: q.insights || [],
+      });
+    } catch (err) {
+      setQuestions({ overview: [], category: [], insights: [] });
+    } finally {
+      setQuestionsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadQuestions(selectedDataset);
+  }, [selectedDataset, loadQuestions]);
+
   const handleSubmit = (e) => {
     e.preventDefault();
     const datasetId = selectedDataset || (datasets.length > 0 ? datasets[0].id : '');
     if (!question.trim() || !datasetId) return;
-    console.log('[QueryInput] Submitting with dataset_id:', datasetId, 'question:', question.trim());
     onSubmit({ question: question.trim(), dataset_id: datasetId });
   };
 
   const handleSuggestion = (q) => {
+    const datasetId = selectedDataset || (datasets.length > 0 ? datasets[0].id : '');
     setQuestion(q);
+    if (datasetId) {
+      onSubmit({ question: q, dataset_id: datasetId });
+    }
   };
 
   const selectedDs = datasets.find((d) => d.id === selectedDataset);
 
-  const suggestions = [
-    'How many suppliers are there?',
-    'Show me total records',
-    'List all available data',
-    'What is the average value?',
-  ];
+  const suggestionGroups = [
+    questions.overview.length ? { label: 'Overview', items: questions.overview } : null,
+    questions.category.length ? { label: 'Compare & Categorize', items: questions.category } : null,
+    questions.insights.length ? { label: 'Deep Dive', items: questions.insights } : null,
+  ].filter(Boolean);
 
   return (
     <motion.div
@@ -114,19 +142,37 @@ const QueryInput = ({ datasets, onSubmit, loading, initialQuestion = '', initial
           />
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {suggestions.map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => handleSuggestion(s)}
-              className="min-h-[36px] px-3 py-1.5 text-xs rounded-apple bg-dark-800/60 border border-white/[0.06] text-dark-400
-                         hover:text-primary-400 hover:border-primary-500/30 transition-all"
-            >
-              {s}
-            </button>
-          ))}
-        </div>
+        {suggestionGroups.length > 0 && (
+          <div className="space-y-2.5">
+            <p className="text-[11px] uppercase tracking-wider text-dark-500 flex items-center gap-1.5">
+              <Lightbulb className="w-3 h-3" />
+              Try a question about this dataset
+            </p>
+            {suggestionGroups.map((group) => (
+              <div key={group.label} className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-dark-500 font-medium w-36 flex-shrink-0">{group.label}</span>
+                {group.items.slice(0, 3).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => handleSuggestion(s)}
+                    disabled={loading}
+                    className="min-h-[34px] px-3 py-1.5 text-xs rounded-apple bg-dark-800/60 border border-white/[0.06] text-dark-400
+                               hover:text-primary-400 hover:border-primary-500/30 transition-all text-left"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {questionsLoading && (
+              <div className="flex items-center gap-2 text-xs text-dark-500">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Loading schema-aware suggestions...
+              </div>
+            )}
+          </div>
+        )}
 
         <button
           type="submit"

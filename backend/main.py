@@ -26,6 +26,15 @@ from ai import (
     nl_to_sql,
     validate_sql_intent,
 )
+from ai.columns import _parse_columns_info
+from ai.profile import build_profile, detect_currency
+from ai.questions import (
+    _preferred_metric,
+    _preferred_category,
+    classify_columns,
+    generate_guidance_questions,
+    generate_quick_questions,
+)
 from ai.provider import provider_info
 from audit import write_audit
 from auth import (
@@ -50,6 +59,8 @@ from models import Dataset, QueryLog, User
 from schemas import (
     DatasetListResponse,
     DatasetPreviewResponse,
+    DatasetProfileResponse,
+    DatasetQuestionsResponse,
     DatasetResponse,
     ForgotPasswordRequest,
     MessageResponse,
@@ -515,6 +526,43 @@ def preview_dataset(
     )
 
 
+@app.get("/api/data/datasets/{dataset_id}/profile", response_model=DatasetProfileResponse, tags=["Data"])
+def dataset_profile(
+    dataset_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Dataset overview + automatic insights for the dashboard. Reuses the column
+    metadata captured at upload time; runs only cheap SQL for values that cannot
+    be derived from metadata alone (date range, per-category totals)."""
+    dataset = _get_owned_dataset(dataset_id, current_user, db)
+    cols_meta = _parse_columns_info(dataset.columns_info or "") if dataset.columns_info else []
+    profile = build_profile(dataset, cols_meta, engine)
+    return DatasetProfileResponse(
+        dataset=DatasetResponse.model_validate(dataset),
+        currency=profile["currency"],
+        overview=profile["overview"],
+        insights=profile["insights"],
+    )
+
+
+@app.get("/api/data/datasets/{dataset_id}/questions", response_model=DatasetQuestionsResponse, tags=["Data"])
+def dataset_questions(
+    dataset_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Schema-aware quick questions, generated from the dataset's actual columns."""
+    dataset = _get_owned_dataset(dataset_id, current_user, db)
+    cols_meta = _parse_columns_info(dataset.columns_info or "") if dataset.columns_info else []
+    qg = generate_quick_questions(cols_meta)
+    return DatasetQuestionsResponse(
+        overview=qg["overview"],
+        category=qg["category"],
+        insights=qg["insights"],
+    )
+
+
 @app.delete("/api/data/datasets/{dataset_id}", response_model=MessageResponse, tags=["Data"])
 def delete_dataset(
     dataset_id: str,
@@ -539,6 +587,138 @@ def delete_dataset(
 
 
 # ──────────────────────────────────────────────
+#  QUERY PIPELINE HELPERS
+# ──────────────────────────────────────────────
+
+VAGUE_QUESTIONS = {
+    "tell me something", "tell me", "tell me more", "hello", "hi", "hey",
+    "what can you do", "help", "help me", "what should i ask", "anything",
+    "surprise me", "what else", "give me something", "analyze", "analyze this",
+    "explore", "suggest", "suggest something", "give me a question",
+}
+
+_TREND_WORDS = ("trend", "over time", "monthly", "weekly", "daily", "yearly", "timeline", "growth")
+
+
+def _is_trend_question(question: str) -> bool:
+    q = question.lower()
+    return any(w in q for w in _TREND_WORDS)
+
+
+def _date_capable(cols_meta: list) -> bool:
+    for c in cols_meta:
+        name = (c.get("name") or "").lower()
+        ctype = str(c.get("type") or "")
+        if ctype == "date" or any(h in name for h in ("date", "time", "month", "year", "quarter", "week", "day")):
+            return True
+    return False
+
+
+_PIPELINE_STAGES = [
+    ("Intent detection", "Understand what the question asks."),
+    ("Schema inspection", "Identify available columns and their types."),
+    ("Relevant column selection", "Pick the numeric, categorical and date columns for the answer."),
+    ("SQL generation", "Translate the question into a SELECT query."),
+    ("Safety validation", "Ensure the SQL is read-only and touches only this dataset."),
+    ("Query execution", "Run the query against the dataset."),
+    ("Result validation", "Check the result matches the question."),
+    ("Chart selection", "Pick a chart that matches the data shape."),
+    ("Summary & insights", "Describe the result in plain language."),
+    ("Recommendations", "Suggest grounded next steps."),
+    ("Follow-up questions", "Suggest schema-aware follow-ups."),
+]
+
+
+def _pipeline(n_done: int) -> list:
+    """Build the pipeline-stage list; stages after ``n_done`` are accurately
+    marked as skipped so the UI never shows steps that did not run."""
+    return [
+        {"stage": name, "status": "done" if i < n_done else "skipped", "detail": detail}
+        for i, (name, detail) in enumerate(_PIPELINE_STAGES)
+    ]
+
+
+def _guidance_response(question: str, message: str, cols_meta: list, n_stages: int,
+                       db: Session, current_user: User, dataset: Dataset) -> QueryResultResponse:
+    """Friendly, honest response for questions the pipeline should not answer
+    (vague prompts, time trends on datasets without a date column)."""
+    db.add(
+        QueryLog(
+            user_id=current_user.id,
+            dataset_id=dataset.id,
+            dataset_name=dataset.name,
+            question=question,
+            is_successful=False,
+            error_message=message,
+        )
+    )
+    db.commit()
+
+    ai_quality = generate_ai_quality(
+        question, "", "table",
+        {"valid": False, "issues": [message], "suggested_fix": None},
+        data_length=0, sql_success=False,
+        columns_info=json.dumps(cols_meta) if cols_meta else "",
+    )
+    follow_ups = generate_guidance_questions(cols_meta) if cols_meta else []
+    return QueryResultResponse(
+        question=question,
+        generated_sql="",
+        data=[],
+        chart_type="table",
+        chart_config={
+            "chart_type": "table",
+            "x_axis": "",
+            "y_axis": "",
+            "title": "Guidance",
+            "description": message,
+        },
+        summary={
+            "executive_summary": [message],
+            "recommendations": [],
+            "risks": [],
+            "follow_up_questions": follow_ups,
+        },
+        follow_up_questions=follow_ups,
+        ai_quality=ai_quality,
+        validation_info={"valid": False, "issues": [message], "suggested_fix": None},
+        pipeline_stages=_pipeline(n_stages),
+        currency=None,
+    )
+
+
+def _compute_enrichment(serialized_rows: list, cols_meta: list, dataset: Dataset, currency) -> dict:
+    """For single-row aggregate results, compute the category breakdown so
+    summaries can name the leading category without guessing."""
+    if len(serialized_rows) != 1:
+        return {}
+    groups = classify_columns(cols_meta)
+    metric = _preferred_metric(groups["numeric"])
+    dim = _preferred_category(groups["categorical"])
+    if not metric or not dim or not dataset.table_name:
+        return {}
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                f'SELECT "{dim}", SUM("{metric}") AS v FROM "{dataset.table_name}" GROUP BY 1 ORDER BY v DESC LIMIT 4'
+            )).fetchall()
+            total = conn.execute(text(
+                f'SELECT COALESCE(SUM("{metric}"), 0) FROM "{dataset.table_name}"'
+            )).fetchone()[0]
+    except Exception as e:
+        logger.warning("Enrichment failed for dataset %s: %s", dataset.id, e)
+        return {}
+    return {
+        "metric": metric,
+        "dimension": dim,
+        "by_dimension": [[r[0], float(r[1])] for r in rows],
+        "total": float(total),
+        "row_count": dataset.row_count,
+        "currency": currency,
+    }
+
+
+# ──────────────────────────────────────────────
 #  QUERY ROUTES
 # ──────────────────────────────────────────────
 
@@ -552,6 +732,27 @@ def execute_nl_query(
 ):
     dataset = _get_owned_dataset(body.dataset_id, current_user, db)
     columns_info = dataset.columns_info or ""
+    cols_meta = _parse_columns_info(columns_info) if columns_info else []
+
+    question = body.question.strip()
+
+    # Guidance: vague prompt -> suggest schema-aware questions instead of guessing.
+    if question.lower().rstrip("!.") in VAGUE_QUESTIONS:
+        return _guidance_response(
+            question,
+            "I can help you explore this dataset. Try asking about totals, averages, "
+            "top items, comparisons across categories, or ask me for a full analysis.",
+            cols_meta, n_stages=2, db=db, current_user=current_user, dataset=dataset,
+        )
+
+    # Guidance: time trend on a dataset without any date/time column.
+    if _is_trend_question(question) and not _date_capable(cols_meta):
+        return _guidance_response(
+            question,
+            "This dataset doesn't contain a date/time column, so I can't calculate a "
+            "time-based trend. Try comparing values across categories instead.",
+            cols_meta, n_stages=2, db=db, current_user=current_user, dataset=dataset,
+        )
 
     generated_sql = nl_to_sql(body.question, dataset.table_name, columns_info)
 
@@ -641,8 +842,16 @@ def execute_nl_query(
     chart_config = detect_chart_type(body.question, columns, serialized_rows)
     chart_type = chart_config.get("chart_type", "table")
 
-    # Generate insights (capability-aware)
-    insights = generate_insights(body.question, serialized_rows, columns, columns_info)
+    # Enrich single-row aggregate results with a real category breakdown + currency
+    groups = classify_columns(cols_meta) if cols_meta else {}
+    currency = detect_currency(dataset.name, groups.get("numeric", []) + groups.get("categorical", []))
+    enrichment = _compute_enrichment(serialized_rows, cols_meta, dataset, currency)
+
+    # Generate insights (capability-aware, schema-aware, result-aware)
+    insights = generate_insights(
+        body.question, serialized_rows, columns, columns_info,
+        enrichment=enrichment, dataset_name=dataset.name,
+    )
 
     # Generate AI quality indicators with capability-aware confidence
     ai_quality = generate_ai_quality(
@@ -682,6 +891,8 @@ def execute_nl_query(
         follow_up_questions=insights.get("follow_up_questions", []),
         ai_quality=ai_quality,
         validation_info=validation_info,
+        pipeline_stages=_pipeline(len(_PIPELINE_STAGES)),
+        currency=currency,
     )
 
 

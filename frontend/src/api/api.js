@@ -107,6 +107,8 @@ export const uploadDataset = (formData) =>
 export const getDatasets = (params) => api.get('/api/data/datasets', { params });
 export const getDataset = (id) => api.get(`/api/data/datasets/${id}`);
 export const getDatasetPreview = (id) => api.get(`/api/data/datasets/${id}/preview`);
+export const getDatasetProfile = (id) => api.get(`/api/data/datasets/${id}/profile`);
+export const getDatasetQuestions = (id) => api.get(`/api/data/datasets/${id}/questions`);
 export const deleteDataset = (id) => api.delete(`/api/data/datasets/${id}`);
 
 // Query

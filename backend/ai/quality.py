@@ -1,7 +1,21 @@
-"""AI quality scoring for the query pipeline."""
+"""AI quality scoring for the query pipeline.
+
+Confidence is a human-readable level (High / Medium / Low) derived from the
+actual pipeline state — intent detection, schema capability, SQL validity,
+execution success and chart choice. A number is never invented: 100% is only
+possible when every stage genuinely succeeded.
+"""
 import re
 
 from .columns import _parse_columns_info, _validate_business_question
+
+
+def _resolve_level(score: float) -> str:
+    if score >= 80:
+        return "High"
+    if score >= 55:
+        return "Medium"
+    return "Low"
 
 
 def generate_ai_quality(question: str, sql: str, chart_type: str, validation_result: dict,
@@ -9,46 +23,27 @@ def generate_ai_quality(question: str, sql: str, chart_type: str, validation_res
     q = question.lower().strip()
     issues = validation_result.get("issues", [])[:]
 
-    # ----- CAPABILITY-AWARE CONFIDENCE -----
     cols_meta = _parse_columns_info(columns_info) if columns_info else []
     biz_validation = _validate_business_question(question, cols_meta) if cols_meta else {}
     business_intent = biz_validation.get("business_intent")
     can_answer = biz_validation.get("can_answer", True)
     missing_cap = biz_validation.get("missing_capability")
 
-    # Step 1: Intent detected
     intent_detected = bool(
-        re.search(r"(how many|total|count|compare|comparison|top|bottom|rank|average|sum|trend|correlation)", q)
+        re.search(r"(how many|total|count|compare|comparison|top|bottom|rank|average|sum|trend|correlation|analyze|overview|summary)", q)
     )
 
-    # Step 2: SQL generated
     sql_generated = bool(sql and not sql.startswith("AI_ERROR"))
-
-    # Step 3: SQL validated
     sql_validated = validation_result.get("valid", True)
 
-    # Step 4: Chart selected correctly
     chart_selected_correctly = chart_type not in ("table",) or data_length > 0
-
-    # Step 5: Summary generated
     summary_generated = True
-
-    # Step 6: Recommendations generated
     recommendations_generated = True
-
-    # Step 7: Follow-up generated
     follow_up_generated = True
-
-    # Step 8: SQL executed successfully
     sql_executed_successfully = sql_success
-
-    # Step 9: Dataset capability match (NEW)
     capability_match = can_answer
+    visualization_quality = chart_type in ("kpi", "bar", "line", "pie", "area", "donut")
 
-    # Visualization quality
-    visualization_quality = chart_type in ("kpi", "bar", "line", "pie", "area")
-
-    # Step scores
     steps = {
         "intent_detected": int(intent_detected),
         "sql_generated": int(sql_generated),
@@ -63,16 +58,32 @@ def generate_ai_quality(question: str, sql: str, chart_type: str, validation_res
 
     total_possible = len(steps)
     total_achieved = sum(steps.values())
-    overall_score = round((total_achieved / total_possible) * 100, 1) if total_possible > 0 else 100.0
+    overall_score = round((total_achieved / total_possible) * 100, 1) if total_possible > 0 else 0.0
 
-    # Apply capability penalty: when a business intent was detected but dataset can't answer it,
-    # significantly reduce confidence to reflect the data reality.
+    reasons = []
     if business_intent and not can_answer:
         missing_label = missing_cap.replace("_", " ").title() if missing_cap else "Requested business domain"
         issues.append(f"{missing_label} analysis cannot be fully performed - required data columns are not available in this dataset.")
-        # Cap penalty: at most ~55% even if everything else passes
+        reasons.append(f"dataset cannot fully answer the '{missing_label}' analysis")
         overall_score = min(overall_score, 55.0)
-        overall_score = round(overall_score * 0.7, 1)  # further reduce by 30%
+        overall_score = round(overall_score * 0.7, 1)
+
+    if not intent_detected:
+        reasons.append("question intent could not be reliably determined")
+    if not sql_generated:
+        reasons.append("SQL generation failed")
+    if sql and not sql_validated:
+        reasons.append("generated SQL did not pass validation")
+    if not sql_executed_successfully:
+        reasons.append("SQL execution failed")
+    if chart_type == "table" and data_length == 0:
+        reasons.append("no rows returned, so no chart was possible")
+    if overall_score < 80 and not reasons:
+        reasons.append("some pipeline steps did not fully succeed")
+
+    confidence_level = _resolve_level(overall_score)
+    if not reasons and confidence_level == "High":
+        reasons.append("all pipeline stages completed successfully")
 
     return {
         "intent_detected": intent_detected,
@@ -86,6 +97,8 @@ def generate_ai_quality(question: str, sql: str, chart_type: str, validation_res
         "capability_match": capability_match,
         "visualization_quality": visualization_quality,
         "overall_score": overall_score,
+        "confidence_level": confidence_level,
+        "confidence_reason": "; ".join(reasons[:3]),
         "step_scores": steps,
         "issues": issues,
     }

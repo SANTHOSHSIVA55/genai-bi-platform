@@ -157,9 +157,9 @@ def classify_column(col_name: str, dtype, nunique: int, total_rows: int, sample_
         if nunique == total_rows and nunique > 10:
             return "id"
         return "metric"
-    if dtype == "object" or dtype == "string":
+    if dtype == "object" or dtype == "string" or dtype == "str":
         ratio = nunique / total_rows if total_rows > 0 else 1
-        if ratio < 0.3:
+        if ratio < 0.5:
             return "categorical"
         return "text"
     return "text"

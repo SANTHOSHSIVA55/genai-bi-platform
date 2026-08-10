@@ -9,19 +9,19 @@ import re
 from .columns import _parse_columns_info, _get_column_type, _validate_business_question
 from .intent import _detect_intent
 from .provider import USE_AI, chat
+from .questions import _preferred_metric
 
 logger = logging.getLogger("app.ai.sql_generator")
 
 
 def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
+    q = question.lower()
     cols = _parse_columns_info(columns_info)
     col_names = [c["name"] for c in cols]
     total_rows_from_info = max((c.get("unique", 0) or 0) for c in cols) if cols else 0
     numeric_cols_all = [c["name"] for c in cols if c.get("dtype") in ("int64", "float64", "int32", "float32")]
-    text_cols_all = [c["name"] for c in cols if c.get("dtype") == "object"]
+    text_cols_all = [c["name"] for c in cols if c.get("dtype") in ("object", "str", "string")]
     all_cols = ", ".join(f'"{c}"' for c in col_names)
-
-    intent = _detect_intent(question, col_names, numeric_cols_all, text_cols_all)
 
     date_cols = [c["name"] for c in cols if "date" in c.get("dtype", "").lower() or "date" in c["name"].lower() or "time" in c["name"].lower()]
 
@@ -41,6 +41,10 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
     # Prefer real metrics for aggregations, not IDs
     numeric_cols = metric_cols if metric_cols else [c for c in numeric_cols_all if c not in id_cols]
     text_cols = cat_cols if cat_cols else text_cols_all
+
+    # Intent detection is fed the classified columns so that e.g. a generic
+    # "category" maps onto the single categorical column via fallback rules.
+    intent = _detect_intent(question, col_names, numeric_cols, text_cols)
 
     # Map intent agg_col away from IDs
     if intent["agg_col"] and intent["agg_col"] in id_cols and metric_cols:
@@ -75,6 +79,59 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
         select_clause = ", ".join(select_parts)
         return f'SELECT {select_clause} FROM "{table_name}"'
 
+    # PERCENTAGE / SHARE: "What percentage of total X is Y?" -> single row
+    if cat_cols and metric_cols and any(kw in q for kw in ("percentage", "percent", "proportion", "what %", "% of", "share")):
+        target = None
+        quoted = re.search(r"['\"]([^'\"]+)['\"]", question)
+        if quoted:
+            target = quoted.group(1)
+        else:
+            # Prefer the value after the trailing "is/are/for" ("... is Food?"),
+            # falling back to "of" for constructions like "share of Food?".
+            m = None
+            for kw in ("is", "are", "for"):
+                matches = list(re.finditer(r"\b" + re.escape(kw) + r"\s+([a-zA-Z][\w\s]*?)\s*\??$", q))
+                if matches:
+                    m = matches[-1]
+                    break
+            if not m:
+                m = re.search(r"\bof\s+([a-zA-Z][\w\s]*?)\s*\??$", q)
+            if m:
+                candidate = m.group(1).strip()
+                candidate = re.sub(r"^(?:in|for|of|on|at|is|are)\s+", "", candidate).strip()
+                for c in cols:
+                    if c["name"] == cat_cols[0] and c.get("top_values"):
+                        for known in c["top_values"]:
+                            if known.lower() == candidate.lower():
+                                target = known
+                                break
+                        if target:
+                            break
+        if target:
+            # The denominator should be the primary metric. `intent["agg_col"]` is
+            # unreliable here (the target value's name may match a split column,
+            # e.g. a "food" column named like the value "Food"), so derive it from
+            # metric columns that are mentioned in the question but are NOT the target.
+            target_low = target.lower()
+            metric = None
+            for c in metric_cols:
+                c_low = c.lower()
+                c_low_clean = c_low.replace("_", " ")
+                if (c_low in q or c_low_clean in q) and c_low != target_low and c_low_clean != target_low:
+                    metric = c
+                    break
+            if not metric:
+                metric = _preferred_metric(metric_cols)
+            dim = cat_cols[0]
+            esc = target.replace("'", "''")
+            return (
+                f'SELECT "{dim}" AS dimension, '
+                f'ROUND(SUM(CASE WHEN "{dim}" = \'{esc}\' THEN "{metric}" ELSE 0 END) * 100.0 '
+                f'/ NULLIF(SUM("{metric}"), 0), 2) AS percentage, '
+                f'ROUND(SUM("{metric}"), 2) AS total_{metric} '
+                f'FROM "{table_name}"'
+            )
+
     # COUNT without GROUP BY
     if intent["is_count_query"] and not intent["group_col"]:
         if intent["agg_col"]:
@@ -93,6 +150,14 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
 
     # RANKING: sort by metric
     if intent["intent_type"] == "ranking":
+        # "Which category has the highest total X?" -> grouped aggregate, one row
+        if intent.get("is_aggregation_rank") and intent["group_col"] and intent["agg_col"]:
+            func = intent["agg_func"] or "SUM"
+            alias = f'{func.lower()}_{intent["agg_col"]}'
+            sql = f'SELECT "{intent["group_col"]}", {func}("{intent["agg_col"]}") AS {alias} FROM "{table_name}" GROUP BY 1 ORDER BY {alias} {intent["sort_order"] or "DESC"}'
+            if intent["limit"]:
+                sql += f' LIMIT {intent["limit"]}'
+            return sql
         select_cols = all_cols
         if intent["group_col"] and intent["agg_col"]:
             select_cols = f'"{intent["group_col"]}", "{intent["agg_col"]}"'
@@ -157,7 +222,11 @@ INTENT RULES - FOLLOW STRICTLY:
 - "Compare X across Y", "X comparison by Y" -> SELECT Y, SUM(X) ... GROUP BY Y ORDER BY SUM(X) DESC
 - "Top N X by Y" -> SELECT X, Y ... ORDER BY Y DESC LIMIT N
 - "Rank X by Y" -> SELECT X, Y ... ORDER BY Y DESC
-- "Analyze", "Summary", "Overview", "Describe" -> SELECT COUNT(*), AVG(metrics), MIN(metrics), MAX(metrics) in a single row
+- "Which Y has the highest/lowest X" -> SELECT Y, SUM(X) AS total_X FROM ... GROUP BY Y ORDER BY total_X DESC LIMIT 1
+- "Analyze", "Summary", "Overview", "Describe", "Give me N key insights", "Key metrics" -> SELECT COUNT(*), AVG(metrics), MIN(metrics), MAX(metrics) in a single row
+- "What percentage/share/proportion of X is Y?" -> SELECT the categorical column, SUM(CASE WHEN col='Y' THEN metric ELSE 0 END)*100.0/NULLIF(SUM(metric),0) AS percentage, and SUM(metric) AS total, in a single row. Never a GROUP BY here unless multiple values are requested.
+- If the question asks about a time trend (trend/over time/monthly/weekly/daily) but the dataset has NO date/time/month/year column, respond with exactly: AI_ERROR_NO_DATE (no SQL).
+- NEVER invent column names. Only reference columns listed in the metadata above.
 """
         result = chat(system_prompt, question)
         if result and not result.startswith("AI_ERROR"):

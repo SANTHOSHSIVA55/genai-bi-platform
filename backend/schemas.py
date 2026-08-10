@@ -111,6 +111,49 @@ class DatasetPreviewResponse(BaseModel):
     sample_rows: list
 
 
+class DatasetOverviewColumn(BaseModel):
+    name: str
+    type: Optional[str] = None
+    dtype: Optional[str] = None
+    unique: Optional[int] = None
+    missing: Optional[int] = None
+    sample_values: list = []
+
+
+class DatasetOverview(BaseModel):
+    row_count: int
+    column_count: int
+    numeric_columns: List[str] = []
+    categorical_columns: List[str] = []
+    date_columns: List[str] = []
+    text_columns: List[str] = []
+    boolean_columns: List[str] = []
+    id_columns: List[str] = []
+    total_missing: int = 0
+    missing_columns: List[dict] = []
+    columns: List[DatasetOverviewColumn] = []
+
+
+class DatasetAutoInsight(BaseModel):
+    type: str
+    title: str
+    text: str
+    values: Optional[List[list]] = None
+
+
+class DatasetProfileResponse(BaseModel):
+    dataset: DatasetResponse
+    currency: Optional[str] = None
+    overview: DatasetOverview
+    insights: List[DatasetAutoInsight] = []
+
+
+class DatasetQuestionsResponse(BaseModel):
+    overview: List[str] = []
+    category: List[str] = []
+    insights: List[str] = []
+
+
 # ─── Query ──────────────────────────────────────────────
 class NLQueryRequest(BaseModel):
     question: str = Field(..., min_length=3, max_length=500)
@@ -140,6 +183,8 @@ class AIQuality(BaseModel):
     capability_match: bool = True
     visualization_quality: bool = True
     overall_score: float = 100.0
+    confidence_level: str = "Medium"
+    confidence_reason: str = ""
     step_scores: dict = {}
     issues: List[str] = []
 
@@ -154,6 +199,8 @@ class QueryResultResponse(BaseModel):
     follow_up_questions: List[str]
     ai_quality: Optional[AIQuality] = None
     validation_info: Optional[ValidationInfo] = None
+    pipeline_stages: List[dict] = []
+    currency: Optional[str] = None
 
 
 class QueryLogResponse(BaseModel):

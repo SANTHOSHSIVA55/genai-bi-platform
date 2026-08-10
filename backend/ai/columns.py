@@ -34,9 +34,9 @@ def _get_column_type(col_name: str, dtype: str, nunique: int, total_rows: int) -
         return "date"
     if dtype in ("float64", "int64", "float32", "int32"):
         return "metric"
-    if dtype == "object":
+    if dtype in ("object", "str", "string"):
         ratio = nunique / total_rows if total_rows > 0 else 1
-        if ratio < 0.3:
+        if ratio < 0.5:
             return "categorical"
         return "text"
     return "text"

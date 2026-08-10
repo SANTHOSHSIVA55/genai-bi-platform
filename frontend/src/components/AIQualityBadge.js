@@ -19,7 +19,7 @@ const ScoreRing = ({ score, size = 72 }) => {
   const offset = circumference - (score / 100) * circumference;
   const strokeWidth = 5;
 
-  const color = score >= 80 ? '#34c759' : score >= 60 ? '#ff9500' : '#ff3b30';
+  const color = score >= 80 ? '#34c759' : score >= 55 ? '#ff9500' : '#ff3b30';
 
   return (
     <svg width={size} height={size} className="transform -rotate-90">
@@ -68,6 +68,12 @@ const AIQualityBadge = ({ quality }) => {
     ANALYSIS_STEPS.filter(s => quality[s.key]).length / ANALYSIS_STEPS.length * 100
   );
 
+  const level = quality.confidence_level || (score >= 80 ? 'High' : score >= 55 ? 'Medium' : 'Low');
+  const levelLabel =
+    level === 'High' ? 'High confidence'
+    : level === 'Medium' ? 'Moderate confidence'
+    : 'Low confidence';
+
   const hasIssues = quality.issues && quality.issues.length > 0;
 
   return (
@@ -86,8 +92,11 @@ const AIQualityBadge = ({ quality }) => {
             AI Analysis Quality
           </h4>
           <p className="text-xs text-dark-400">
-            {score >= 80 ? 'High confidence' : score >= 60 ? 'Moderate confidence' : 'Low confidence'} in AI-generated results
+            {levelLabel} in AI-generated results
           </p>
+          {quality.confidence_reason && (
+            <p className="mt-1.5 text-xs text-dark-500 italic">{quality.confidence_reason}</p>
+          )}
           {hasIssues && (
             <div className="mt-2 flex items-start gap-1.5 text-xs text-red-400">
               <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
