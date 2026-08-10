@@ -4,6 +4,30 @@ import re
 from .columns import _match_col, _simple_stem
 from .questions import _preferred_metric
 
+
+def _match_metric(word: str, numeric_cols: list):
+    """Match a question's metric word against the numeric/metric columns only.
+
+    Extends _match_col with a token-prefix rule so that a noun like "units"
+    resolves to "units_sold" or "net_revenue" from "revenue". The rule is
+    deliberately restricted to numeric columns: "Which cities have the most
+    suppliers?" must never resolve the noun "suppliers" to a *text* column
+    such as "supplier_name" (that question is a grouped COUNT, not a metric
+    ranking).
+    """
+    hit = _match_col(word, numeric_cols)
+    if hit:
+        return hit
+    stem = _simple_stem(word.strip())
+    if len(stem) < 3:
+        return None
+    for c in numeric_cols:
+        for token in c.lower().replace("_", " ").split():
+            t_stem = _simple_stem(token)
+            if len(t_stem) >= 3 and (t_stem.startswith(stem) or stem.startswith(t_stem)):
+                return c
+    return None
+
 # Nouns/phrases that signal a numeric MEASURE is being asked about. Used to
 # decide whether a fallback metric applies: "Which cities have the most
 # suppliers?" must COUNT suppliers, NOT aggregate whatever the first numeric
@@ -130,7 +154,7 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
                     metric_phrase = re.sub(r"\b" + kw + r"\b", "", metric_phrase).strip()
                     break
             for w in re.findall(r"\w+", metric_phrase):
-                intent["agg_col"] = _match_col(w, numeric_cols) or _match_col(w, col_names)
+                intent["agg_col"] = _match_metric(w, numeric_cols) or _match_col(w, col_names)
                 if intent["agg_col"]:
                     break
             if not intent["group_col"] and len(cat_cols) == 1:
@@ -229,7 +253,7 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
 
             words = re.findall(r'\w+', metric_phrase)
             for w in words:
-                intent['agg_col'] = _match_col(w, numeric_cols)
+                intent['agg_col'] = _match_metric(w, numeric_cols)
                 if intent['agg_col']:
                     break
             if not intent['agg_col']:
@@ -279,7 +303,7 @@ def _detect_intent(question: str, col_names: list, numeric_cols: list, text_cols
                 intent['sort_order'] = 'ASC'
 
             for w in re.findall(r'\w+', metric_phrase):
-                intent['agg_col'] = _match_col(w, numeric_cols)
+                intent['agg_col'] = _match_metric(w, numeric_cols)
                 if intent['agg_col']:
                     break
             for w in re.findall(r'\w+', entity_phrase):

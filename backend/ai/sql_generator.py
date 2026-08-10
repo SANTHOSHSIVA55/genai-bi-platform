@@ -6,7 +6,7 @@ rule-based engine that is fully deterministic and testable.
 import logging
 import re
 
-from .columns import _parse_columns_info, _get_column_type, _validate_business_question
+from .columns import _match_col, _parse_columns_info, _get_column_type, _validate_business_question
 from .intent import _detect_intent
 from .provider import USE_AI, chat
 from .questions import _preferred_metric
@@ -91,6 +91,34 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
 
     # PERCENTAGE / SHARE: "What percentage of total X is Y?" -> single row
     if cat_cols and metric_cols and any(kw in q for kw in ("percentage", "percent", "proportion", "what %", "% of", "share")):
+        # Grouped share: "What percentage of <metric> comes from each <dim>?"
+        # or "... by <dim>?" -> one share row per dimension value, ordered
+        # descending, using the metric named in the question (else preferred).
+        dim_phrase = None
+        m = re.search(r"\b(?:each|per)\s+([a-z][a-z0-9_ ]*?)(?:\s+(?:comes|is|accounts|was|were|for|of)\b|\s*\??$)", q)
+        if not m:
+            m = re.search(r"\bby\s+([a-z][a-z0-9_ ]*?)\s*\??$", q)
+        if m:
+            dim_phrase = m.group(1).strip()
+        group_share = None
+        if dim_phrase:
+            for w in re.findall(r"\w+", dim_phrase):
+                group_share = _match_col(w, cat_cols) or _match_col(w, col_names)
+                if group_share:
+                    break
+        if group_share:
+            metric = None
+            for c in metric_cols:
+                if c.lower() in q or c.lower().replace("_", " ") in q:
+                    metric = c
+                    break
+            if not metric:
+                metric = _preferred_metric(metric_cols)
+            return _finish(
+                f'SELECT "{group_share}", '
+                f'ROUND(SUM("{metric}") * 100.0 / NULLIF(SUM("{metric}"), 0), 2) AS percentage '
+                f'FROM "{table_name}" GROUP BY "{group_share}" ORDER BY percentage DESC LIMIT 100'
+            )
         target = None
         quoted = re.search(r"['\"]([^'\"]+)['\"]", question)
         if quoted:

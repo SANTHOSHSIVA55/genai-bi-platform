@@ -196,6 +196,36 @@ class TestIntentVariations:
         assert 'LIMIT 5' in sql.upper()
         assert '"revenue", "revenue"' not in sql  # no degenerate group==metric select
 
+    def test_metric_noun_maps_to_composite_column_token(self):
+        # "units" must resolve to the units_sold column, not fall back to
+        # revenue via the preferred-metric default.
+        cols = json.dumps([
+            {"name": "product", "dtype": "object", "type": "categorical", "unique": 4},
+            {"name": "category", "dtype": "object", "type": "categorical", "unique": 3},
+            {"name": "revenue", "dtype": "int64", "type": "metric", "unique": 20},
+            {"name": "units_sold", "dtype": "int64", "type": "metric", "unique": 20},
+            {"name": "sale_date", "dtype": "object", "type": "date", "unique": 20},
+        ])
+        it = _detect_intent("Which product sold the most units?", ["product", "category", "revenue", "units_sold", "sale_date"],
+                            ["revenue", "units_sold"], ["product", "category"])
+        assert it["agg_col"] == "units_sold"
+        sql = _local_nl_to_sql("Which product sold the most units?", "t", cols)
+        assert 'SUM("units_sold")' in sql and '"revenue"' not in sql
+
+    def test_match_col_token_prefix(self):
+        # _match_col keeps exact/stem semantics only...
+        from ai.columns import _match_col
+        assert _match_col("units", ["revenue", "units_sold", "net_revenue"]) is None
+        assert _match_col("net revenue", ["revenue", "units_sold", "net_revenue"]) == "net_revenue"
+        # ...while the metric matcher additionally resolves composite tokens.
+        from ai.intent import _match_metric
+        assert _match_metric("units", ["revenue", "units_sold"]) == "units_sold"
+        assert _match_metric("revenue", ["revenue", "units_sold"]) == "revenue"
+        assert _match_metric("net revenue", ["revenue", "net_revenue"]) == "net_revenue"
+        assert _match_metric("price", ["revenue", "units_sold"]) is None
+        # The rule must never fire against text/entity nouns in the metric slot:
+        assert _match_metric("suppliers", ["revenue", "units_sold"]) is None
+
     def test_city_most_orders_uses_order_count_alias(self):
         cols = json.dumps([
             {"name": "city", "dtype": "object", "type": "text", "unique": 3},
@@ -213,6 +243,15 @@ class TestIntentVariations:
     def test_revenue_by_region_groups_and_sums(self):
         sql = _local_nl_to_sql("Show revenue by region", "t", SALES_COLS)
         assert 'SUM("revenue")' in sql and 'GROUP BY "region"' in sql
+
+    def test_percentage_of_metric_by_dimension(self):
+        sql = _local_nl_to_sql("What percentage of revenue comes from each region?", "t", SALES_COLS)
+        assert '"region"' in sql and 'percentage' in sql
+        assert '* 100.0' in sql and 'NULLIF' in sql
+        assert 'GROUP BY "region"' in sql
+        # by-variant
+        sql2 = _local_nl_to_sql("What percentage of revenue by region?", "t", SALES_COLS)
+        assert '"region"' in sql2 and 'GROUP BY "region"' in sql2
 
     def test_unique_numeric_revenue_not_mistaken_for_id(self):
         from ai.columns import _get_column_type
