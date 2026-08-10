@@ -11,8 +11,8 @@ A production-oriented Business Intelligence platform powered by Generative AI. U
 ## Live Deployment
 
 - **Frontend (Vercel):** <https://genaibi.vercel.app>
-- **Backend API (Vercel):** <https://backend-liard-one-27.vercel.app> — health check at `/api/health` returns `version: 2.0.0`, database status, and AI provider info.
-- **Status:** the v2.0.0 upgrade is live. The backend currently uses ephemeral storage because no managed PostgreSQL connection string is provisioned yet; set `DATABASE_URL` on the hosting platform and the backend auto-migrates via Alembic on boot (see `backend/Dockerfile` and `backend/alembic/`). For production data durability, run the backend on Railway/container with a managed Postgres service, or set a Neon/Supabase/RDS connection string on Vercel.
+- **Backend API (Vercel):** <https://backend-liard-one-27.vercel.app> — health check at `/api/health` returns `version: 2.0.0`, `database: ok` (Neon PostgreSQL), and AI provider info.
+- **Production database (Neon):** the backend is connected to a managed Neon PostgreSQL instance via the Vercel Neon integration (schema created with Alembic). `DATABASE_URL` and the related Neon variables are injected as encrypted environment variables on the Vercel project, so uploaded datasets and query history persist durably across deployments and serverless cold starts.
 
 ---
 
