@@ -25,7 +25,7 @@ from ai.clarity import check_question_feasibility, detect_ambiguous_question, de
 from ai.intent import _detect_intent
 from ai.profile import detect_currency
 from ai.semantics import analyze_sql_semantics, format_semantic_value
-from ai.sql_generator import _local_nl_to_sql
+from ai.sql_generator import _canonicalize_table_refs, _local_nl_to_sql
 from ai.sql_validator import validate_sql_intent
 from data_cleaner import assess_data_quality, read_uploaded_file
 from conftest import _unique, upload_csv
@@ -87,6 +87,22 @@ class TestValidatorAliasMatrix:
         res = validate_sql_intent("show by region", sql, "t", cols)
         assert res["valid"] is True, (sql, res)
         assert "does not exist" not in " ".join(res["issues"]).lower()
+
+    def test_table_ref_canonicalization(self):
+        # LLM-generated SQL frequently changes the table name's case or quoting;
+        # it must be rewritten to the canonical quoted form so the safety
+        # validator (case-sensitive allowed_tables) accepts it.
+        tbl = "ds_459e97392f"
+        assert _canonicalize_table_refs(f'SELECT * FROM {tbl.upper()}', tbl) == f'SELECT * FROM "{tbl}"'
+        assert _canonicalize_table_refs(f'SELECT * FROM "{tbl.upper()}"', tbl) == f'SELECT * FROM "{tbl}"'
+        assert _canonicalize_table_refs(f'SELECT * FROM "ds_459e97392f"', tbl) == f'SELECT * FROM "ds_459e97392f"'
+        # A different table name is left untouched.
+        assert _canonicalize_table_refs('SELECT * FROM "other_table"', tbl) == 'SELECT * FROM "other_table"'
+        # AI-style mangled reference then validates against the canonical table.
+        sql = f'SELECT "city", COUNT(*) FROM {tbl.upper()} GROUP BY "city"'
+        fixed = _canonicalize_table_refs(sql, tbl)
+        res = validate_sql_intent("count by city", fixed, tbl, SUPPLIERS_COLS)
+        assert res["valid"] is True, res
 
     def test_unknown_physical_column_still_rejected(self):
         sql = 'SELECT "totally_fake_col" FROM "t"'

@@ -286,6 +286,22 @@ INTENT RULES - FOLLOW STRICTLY:
         if result and not result.startswith("AI_ERROR"):
             result = re.sub(r"```sql\s*", "", result)
             result = re.sub(r"```\s*", "", result)
-            return result.strip().rstrip(";")
+            return _canonicalize_table_refs(result.strip().rstrip(";"), table_name)
 
     return _local_nl_to_sql(question, table_name, columns_info)
+
+
+def _canonicalize_table_refs(sql: str, table_name: str) -> str:
+    """Force every reference to the one allowed table to its canonical quoted,
+    exact-case form. LLMs frequently upper-case or drop quotes around the table
+    name (e.g. ``FROM DS_ABC...``); the safety validator matches the table
+    reference case-sensitively, so an off-case reference gets rejected even
+    though the intent is valid."""
+    # Matches "tbl", `tbl`, [tbl], or bare tbl with any casing, and rewrites
+    # it to the canonical "tbl".
+    pattern = re.compile(
+        r'(?i)(?:")(?P<name>' + re.escape(table_name) + r')(?:")'
+        r'|(?:`)(?P<name2>' + re.escape(table_name) + r')(?:`)'
+        r'|(?:\b)(?P<name3>' + re.escape(table_name) + r')(?:\b)'
+    )
+    return pattern.sub(lambda m: f'"{table_name}"', sql)

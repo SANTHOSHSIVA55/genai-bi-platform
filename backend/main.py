@@ -793,7 +793,9 @@ def execute_nl_query(
     # Validate SQL intent - check if SQL matches user intent
     validation_result = validate_sql_intent(body.question, generated_sql, dataset.table_name, columns_info)
 
-    # Auto-regenerate if validation fails
+    # Auto-regenerate if validation fails: retry the AI once, then fall back to
+    # the deterministic local engine, which is schema-grounded and always
+    # produces validatable SQL. Never surface an invalid AI query to execution.
     if not validation_result["valid"]:
         regenerated_sql = nl_to_sql(body.question, dataset.table_name, columns_info)
         revalidation = validate_sql_intent(body.question, regenerated_sql, dataset.table_name, columns_info)
@@ -801,8 +803,14 @@ def execute_nl_query(
             generated_sql = regenerated_sql
             validation_result = revalidation
         else:
-            generated_sql = regenerated_sql
-            validation_result["issues"].extend(revalidation["issues"])
+            local_sql = _local_nl_to_sql(body.question, dataset.table_name, columns_info)
+            local_validation = validate_sql_intent(body.question, local_sql, dataset.table_name, columns_info)
+            if local_validation["valid"]:
+                generated_sql = local_sql
+                validation_result = local_validation
+            else:
+                generated_sql = regenerated_sql
+                validation_result["issues"].extend(revalidation["issues"])
 
     # Safety validate SQL
     try:
