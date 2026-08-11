@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from ai import (
     _local_nl_to_sql,
+    USE_AI,
     detect_chart_type,
     generate_ai_quality,
     generate_insights,
@@ -28,8 +29,13 @@ from ai import (
 )
 from ai.columns import _parse_columns_info
 from ai.clarity import check_question_feasibility
+from ai.joins import build_multi_table_sql
 from ai.profile import build_profile, detect_currency
+from ai.relationships import detect_relationships
+from ai.result_check import validate_result
 from ai.semantics import analyze_sql_semantics
+from ai.sql_validator import validate_sql_intent_multi
+from ai.sufficiency import check_sufficiency
 from ai.questions import (
     _preferred_metric,
     _preferred_category,
@@ -620,17 +626,17 @@ def _date_capable(cols_meta: list) -> bool:
 
 
 _PIPELINE_STAGES = [
-    ("Intent detection", "Understand what the question asks."),
-    ("Schema inspection", "Identify available columns and their types."),
+    ("Question understanding", "Understand what the question asks and what it expects back."),
+    ("Schema inspection", "Inspect the uploaded tables, their columns and value shapes."),
+    ("Required-data check", "Verify the data needed for a real answer actually exists."),
+    ("Multi-table relationship check", "Detect verified links between the selected tables."),
     ("Relevant column selection", "Pick the numeric, categorical and date columns for the answer."),
-    ("SQL generation", "Translate the question into a SELECT query."),
-    ("Safety validation", "Ensure the SQL is read-only and touches only this dataset."),
-    ("Query execution", "Run the query against the dataset."),
-    ("Result validation", "Check the result matches the question."),
-    ("Chart selection", "Pick a chart that matches the data shape."),
-    ("Summary & insights", "Describe the result in plain language."),
-    ("Recommendations", "Suggest grounded next steps."),
-    ("Follow-up questions", "Suggest schema-aware follow-ups."),
+    ("SQL generation", "Translate the question into a validated SELECT query."),
+    ("Safety validation", "Ensure the SQL is read-only and touches only the selected data."),
+    ("Query execution", "Run the query against the database."),
+    ("Result validation", "Verify the result actually answers the question."),
+    ("Chart selection", "Pick a chart that matches the data shape without misleading."),
+    ("Summary & insights", "Describe the result, risks and grounded next steps."),
 ]
 
 
@@ -643,18 +649,29 @@ def _pipeline(n_done: int) -> list:
     ]
 
 
+def _owned_datasets(ids: list, current_user: User, db: Session) -> list:
+    """Load and own-check a list of dataset IDs, deduplicated, in order."""
+    unique_ids = list(dict.fromkeys(ids))
+    datasets = [_get_owned_dataset(did, current_user, db) for did in unique_ids]
+    return datasets
+
+
 def _guidance_response(question: str, message: str, cols_meta: list, n_stages: int,
-                       db: Session, current_user: User, dataset: Dataset) -> QueryResultResponse:
+                       db: Session, current_user: User, dataset: Dataset,
+                       answer_status: str = "clarification",
+                       sufficiency: dict = None,
+                       datasets_used: list = None) -> QueryResultResponse:
     """Friendly, honest response for questions the pipeline should not answer
-    (vague prompts, time trends on datasets without a date column)."""
+    (vague prompts, time trends on datasets without a date column, questions the
+    uploaded data cannot support)."""
     db.add(
         QueryLog(
             user_id=current_user.id,
             dataset_id=dataset.id,
             dataset_name=dataset.name,
             question=question,
-            is_successful=False,
-            error_message=message,
+            is_successful=answer_status == "answered",
+            error_message=message if answer_status != "answered" else None,
         )
     )
     db.commit()
@@ -664,6 +681,7 @@ def _guidance_response(question: str, message: str, cols_meta: list, n_stages: i
         {"valid": False, "issues": [message], "suggested_fix": None},
         data_length=0, sql_success=False,
         columns_info=json.dumps(cols_meta) if cols_meta else "",
+        sufficiency_verdict=sufficiency,
     )
     follow_ups = generate_guidance_questions(cols_meta) if cols_meta else []
     return QueryResultResponse(
@@ -689,6 +707,66 @@ def _guidance_response(question: str, message: str, cols_meta: list, n_stages: i
         validation_info={"valid": False, "issues": [message], "suggested_fix": None},
         pipeline_stages=_pipeline(n_stages),
         currency=None,
+        answer_status=answer_status,
+        sufficiency=sufficiency or {},
+        datasets_used=[d.get("table_name") for d in (datasets_used or [])],
+    )
+
+
+def _insufficient_response(question: str, verdict: dict, cols_meta: list,
+                           db: Session, current_user: User, datasets: list) -> QueryResultResponse:
+    """Response when the sufficiency gate stops the pipeline: the question is
+    not answerable from the uploaded data (or is ambiguous). The pipeline stops
+    at the required-data stage instead of fabricating a numeric answer."""
+    message = verdict.get("message") or "The uploaded data cannot answer this question."
+    primary = datasets[0]
+    cols_meta = cols_meta or _parse_columns_info(primary.columns_info or "")
+    n_stages = 3  # stops at "Required-data check"
+    ai_quality = generate_ai_quality(
+        question, "", "table",
+        {"valid": False, "issues": [message], "suggested_fix": None},
+        data_length=0, sql_success=False,
+        columns_info=json.dumps(cols_meta) if cols_meta else "",
+        sufficiency_verdict=verdict,
+    )
+    follow_ups = generate_guidance_questions(cols_meta) if cols_meta else []
+
+    required = verdict.get("required") or []
+    available = verdict.get("available") or []
+    missing = verdict.get("missing") or []
+
+    detail = message
+    if missing:
+        detail += " Missing: " + "; ".join(missing) + "."
+    if required:
+        detail += " Would need: " + "; ".join(required) + "."
+
+    return QueryResultResponse(
+        question=question,
+        generated_sql="",
+        data=[],
+        chart_type="table",
+        chart_config={
+            "chart_type": "table",
+            "x_axis": "",
+            "y_axis": "",
+            "title": "Data does not support this question",
+            "description": detail,
+        },
+        summary={
+            "executive_summary": [message],
+            "recommendations": [],
+            "risks": ["Answering this question from the current data would be misleading."],
+            "follow_up_questions": follow_ups,
+        },
+        follow_up_questions=follow_ups,
+        ai_quality=ai_quality,
+        validation_info={"valid": False, "issues": [message], "suggested_fix": None},
+        pipeline_stages=_pipeline(n_stages),
+        currency=None,
+        answer_status="insufficient" if verdict.get("status") == "insufficient" else "clarification",
+        sufficiency=verdict,
+        datasets_used=[d.table_name for d in datasets],
     )
 
 
@@ -735,9 +813,26 @@ def execute_nl_query(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    dataset = _get_owned_dataset(body.dataset_id, current_user, db)
-    columns_info = dataset.columns_info or ""
-    cols_meta = _parse_columns_info(columns_info) if columns_info else []
+    # Load the primary dataset and, when provided, the additional datasets for
+    # multi-dataset analysis (relationships/JOINs).
+    primary = _get_owned_dataset(body.dataset_id, current_user, db)
+    datasets = _owned_datasets([body.dataset_id] + (body.dataset_ids or []), current_user, db)
+    if len(datasets) == 1:
+        datasets = [primary]
+    multi = len(datasets) > 1
+
+    primary_columns_info = primary.columns_info or ""
+    cols_meta = _parse_columns_info(primary_columns_info) if primary_columns_info else []
+    datasets_meta = [
+        {
+            "id": d.id,
+            "name": d.name,
+            "table_name": d.table_name,
+            "columns_info": d.columns_info or "",
+            "row_count": d.row_count,
+        }
+        for d in datasets
+    ]
 
     question = body.question.strip()
 
@@ -747,7 +842,7 @@ def execute_nl_query(
             question,
             "I can help you explore this dataset. Try asking about totals, averages, "
             "top items, comparisons across categories, or ask me for a full analysis.",
-            cols_meta, n_stages=2, db=db, current_user=current_user, dataset=dataset,
+            cols_meta, n_stages=2, db=db, current_user=current_user, dataset=primary,
         )
 
     # Guidance: time trend on a dataset without any date/time column.
@@ -756,7 +851,7 @@ def execute_nl_query(
             question,
             "This dataset doesn't contain a date/time column, so I can't calculate a "
             "time-based trend. Try comparing values across categories instead.",
-            cols_meta, n_stages=2, db=db, current_user=current_user, dataset=dataset,
+            cols_meta, n_stages=2, db=db, current_user=current_user, dataset=primary,
         )
 
     # Guidance: ambiguous ("What is the best product?") and unsupported
@@ -767,19 +862,46 @@ def execute_nl_query(
         return _guidance_response(
             question,
             feasibility["guidance"],
-            cols_meta, n_stages=2, db=db, current_user=current_user, dataset=dataset,
+            cols_meta, n_stages=2, db=db, current_user=current_user, dataset=primary,
         )
 
-    generated_sql = nl_to_sql(body.question, dataset.table_name, columns_info)
+    # ── SUFFICIENCY GATE (primary prevention of wrong answers) ──────────────
+    # Before any SQL is generated, verify the required data actually exists. The
+    # critical bug pattern ("How many customers purchased two items together?"
+    # answered with COUNT(*) over a customer directory) is stopped here.
+    suff = check_sufficiency(question, datasets_meta)
+    if suff["status"] in ("insufficient", "ambiguous"):
+        return _insufficient_response(question, suff, cols_meta, db, current_user, datasets)
 
-    if generated_sql.startswith("AI_ERROR"):
-        logger.error("AI provider error for question %r: %s", body.question, generated_sql)
+    # ── SQL GENERATION ──────────────────────────────────────────────────────
+    multi_plan = None
+    if multi:
+        relationships = detect_relationships(engine, datasets_meta)
+        multi_plan = build_multi_table_sql(question, datasets_meta, relationships)
+
+    if multi_plan:
+        generated_sql = multi_plan["sql"]
+        validation_result = validate_sql_intent_multi(question, generated_sql, datasets_meta)
+        used_tables = multi_plan.get("tables_used") or [d.table_name for d in datasets]
+        if not validation_result["valid"]:
+            # Fall back to the single-table path rather than surfacing bad SQL.
+            generated_sql = None
+        else:
+            generation_route = "join"
+
+    if not multi_plan:
+        generated_sql = nl_to_sql(question, primary.table_name, primary_columns_info)
+        used_tables = [primary.table_name]
+        generation_route = "ai" if USE_AI else "local"
+
+    if generated_sql and generated_sql.startswith("AI_ERROR"):
+        logger.error("AI provider error for question %r: %s", question, generated_sql)
         db.add(
             QueryLog(
                 user_id=current_user.id,
-                dataset_id=dataset.id,
-                dataset_name=dataset.name,
-                question=body.question,
+                dataset_id=primary.id,
+                dataset_name=primary.name,
+                question=question,
                 is_successful=False,
                 error_message="AI service unavailable",
             )
@@ -790,21 +912,27 @@ def execute_nl_query(
             detail="The AI service is temporarily unavailable. Please try again later.",
         )
 
-    # Validate SQL intent - check if SQL matches user intent
-    validation_result = validate_sql_intent(body.question, generated_sql, dataset.table_name, columns_info)
+    if generated_sql is None:
+        # Join plan failed validation -> regenerate against the primary table.
+        generated_sql = nl_to_sql(question, primary.table_name, primary_columns_info)
+        used_tables = [primary.table_name]
+        generation_route = "ai" if USE_AI else "local"
+
+    if generation_route != "join":
+        validation_result = validate_sql_intent(question, generated_sql, primary.table_name, primary_columns_info)
 
     # Auto-regenerate if validation fails: retry the AI once, then fall back to
     # the deterministic local engine, which is schema-grounded and always
     # produces validatable SQL. Never surface an invalid AI query to execution.
-    if not validation_result["valid"]:
-        regenerated_sql = nl_to_sql(body.question, dataset.table_name, columns_info)
-        revalidation = validate_sql_intent(body.question, regenerated_sql, dataset.table_name, columns_info)
+    if not validation_result["valid"] and generation_route != "join":
+        regenerated_sql = nl_to_sql(question, primary.table_name, primary_columns_info)
+        revalidation = validate_sql_intent(question, regenerated_sql, primary.table_name, primary_columns_info)
         if revalidation["valid"]:
             generated_sql = regenerated_sql
             validation_result = revalidation
         else:
-            local_sql = _local_nl_to_sql(body.question, dataset.table_name, columns_info)
-            local_validation = validate_sql_intent(body.question, local_sql, dataset.table_name, columns_info)
+            local_sql = _local_nl_to_sql(question, primary.table_name, primary_columns_info)
+            local_validation = validate_sql_intent(question, local_sql, primary.table_name, primary_columns_info)
             if local_validation["valid"]:
                 generated_sql = local_sql
                 validation_result = local_validation
@@ -812,43 +940,40 @@ def execute_nl_query(
                 generated_sql = regenerated_sql
                 validation_result["issues"].extend(revalidation["issues"])
 
-    # Safety validate SQL
+    # Safety validate SQL against the exact set of tables the query may touch.
     try:
-        safe_sql = validate_sql(generated_sql, allowed_tables=[dataset.table_name])
+        safe_sql = validate_sql(generated_sql, allowed_tables=used_tables)
     except HTTPException:
         raise
 
     # Execute query (capped at RESULT_LIMIT rows)
-    sql_error = None
     try:
         with engine.connect() as conn:
             result = conn.execute(text(safe_sql))
             columns = list(result.keys())
             raw_rows = result.fetchmany(RESULT_LIMIT + 1)
-            truncated = len(raw_rows) > RESULT_LIMIT
             rows = [dict(zip(columns, r)) for r in raw_rows[:RESULT_LIMIT]]
     except Exception as e:
-        sql_error = str(e)
-        logger.error("SQL execution failed for dataset %s: %s", dataset.id, e)
+        logger.error("SQL execution failed for dataset %s: %s", primary.id, e)
         db.add(
             QueryLog(
                 user_id=current_user.id,
-                dataset_id=dataset.id,
-                dataset_name=dataset.name,
-                question=body.question,
+                dataset_id=primary.id,
+                dataset_name=primary.name,
+                question=question,
                 generated_sql=safe_sql,
                 is_successful=False,
                 error_message="SQL execution failed",
             )
         )
         db.commit()
-        suggested_fix = _local_nl_to_sql(body.question, dataset.table_name, columns_info)
+        suggested_fix = _local_nl_to_sql(question, primary.table_name, primary_columns_info)
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "The query could not be executed. The generated SQL may be incompatible with this dataset.",
                 "generated_sql": safe_sql,
-                "question": body.question,
+                "question": question,
                 "suggested_fix": suggested_fix,
                 "error_type": "sql_execution",
             },
@@ -862,14 +987,17 @@ def execute_nl_query(
             serialized[k] = _json_safe(v)
         serialized_rows.append(serialized)
 
+    # ── POST-EXECUTION RESULT VALIDATION (second net) ───────────────────────
+    result_verdict = validate_result(question, columns, serialized_rows, cols_meta, safe_sql)
+
     # Detect chart type
-    chart_config = detect_chart_type(body.question, columns, serialized_rows)
+    chart_config = detect_chart_type(question, columns, serialized_rows)
     chart_type = chart_config.get("chart_type", "table")
 
     # Enrich single-row aggregate results with a real category breakdown + currency
     groups = classify_columns(cols_meta) if cols_meta else {}
-    currency = detect_currency(dataset.name, groups.get("numeric", []) + groups.get("categorical", []))
-    enrichment = _compute_enrichment(serialized_rows, cols_meta, dataset, currency)
+    currency = detect_currency(primary.name, groups.get("numeric", []) + groups.get("categorical", []))
+    enrichment = _compute_enrichment(serialized_rows, cols_meta, primary, currency)
 
     # Semantic types per result column: COUNT results are never currency, only
     # genuinely monetary fields get currency formatting.
@@ -877,17 +1005,27 @@ def execute_nl_query(
 
     # Generate insights (capability-aware, schema-aware, result-aware)
     insights = generate_insights(
-        body.question, serialized_rows, columns, columns_info,
-        enrichment=enrichment, dataset_name=dataset.name,
+        question, serialized_rows, columns, primary_columns_info,
+        enrichment=enrichment, dataset_name=primary.name,
         semantic_types=semantic_types,
     )
 
     # Generate AI quality indicators with capability-aware confidence
     ai_quality = generate_ai_quality(
-        body.question, safe_sql, chart_type, validation_result,
+        question, safe_sql, chart_type, validation_result,
         data_length=len(serialized_rows), sql_success=True,
-        columns_info=columns_info,
+        columns_info=primary_columns_info,
+        sufficiency_verdict=suff,
+        result_verdict=result_verdict,
     )
+
+    # Answer status contract: answered / insufficient / clarification / failed
+    if result_verdict["status"] == "invalid":
+        answer_status = "failed"
+    elif result_verdict["status"] == "questionable":
+        answer_status = "answered"
+    else:
+        answer_status = "answered"
 
     validation_info = {
         "valid": validation_result["valid"],
@@ -898,20 +1036,20 @@ def execute_nl_query(
     db.add(
         QueryLog(
             user_id=current_user.id,
-            dataset_id=dataset.id,
-            dataset_name=dataset.name,
-            question=body.question,
+            dataset_id=primary.id,
+            dataset_name=primary.name,
+            question=question,
             generated_sql=safe_sql,
             result_summary=json.dumps(insights.get("executive_summary", [])),
             chart_type=chart_type,
             row_count=len(serialized_rows),
-            is_successful=True,
+            is_successful=answer_status == "answered",
         )
     )
     db.commit()
 
     return QueryResultResponse(
-        question=body.question,
+        question=question,
         generated_sql=safe_sql,
         data=serialized_rows,
         chart_type=chart_type,
@@ -923,6 +1061,9 @@ def execute_nl_query(
         pipeline_stages=_pipeline(len(_PIPELINE_STAGES)),
         currency=currency,
         semantic_types=semantic_types,
+        answer_status=answer_status,
+        sufficiency=suff,
+        datasets_used=[d.table_name for d in datasets],
     )
 
 

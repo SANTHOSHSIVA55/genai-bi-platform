@@ -159,6 +159,7 @@ class DatasetQuestionsResponse(BaseModel):
 class NLQueryRequest(BaseModel):
     question: str = Field(..., min_length=3, max_length=500)
     dataset_id: str = Field(..., min_length=8, max_length=64, pattern=r"^[0-9a-fA-F-]+$")
+    dataset_ids: Optional[List[str]] = None
 
     @field_validator("question")
     @classmethod
@@ -203,6 +204,9 @@ class QueryResultResponse(BaseModel):
     pipeline_stages: List[dict] = []
     currency: Optional[str] = None
     semantic_types: dict = {}
+    answer_status: str = "answered"
+    sufficiency: dict = {}
+    datasets_used: List[str] = []
 
 
 class QueryLogResponse(BaseModel):

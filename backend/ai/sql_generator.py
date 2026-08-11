@@ -7,11 +7,66 @@ import logging
 import re
 
 from .columns import _match_col, _parse_columns_info, _get_column_type, _validate_business_question
-from .intent import _detect_intent
+from .intent import _detect_intent, _match_metric
 from .provider import USE_AI, chat
 from .questions import _preferred_metric
 
 logger = logging.getLogger("app.ai.sql_generator")
+
+
+def _local_statistical_sql(question: str, table_name: str, columns_info: str) -> str | None:
+    """Statistical queries (median / std dev / variance / percentile) as SQL.
+
+    Only returns SQL when the statistical keyword maps to an actual numeric
+    column; otherwise None so the caller responds honestly instead of guessing.
+    """
+    q = question.lower()
+    cols = _parse_columns_info(columns_info)
+    total_rows = max((c.get("unique", 0) or 0) for c in cols) if cols else 0
+    metrics = [c["name"] for c in cols if _get_column_type(c["name"], c.get("dtype", ""), c.get("unique", 0) or 0, total_rows) == "metric"]
+    if not metrics:
+        return None
+
+    def _target_col():
+        for c in metrics:
+            if c.lower() in q or c.lower().replace("_", " ") in q:
+                return c
+        for w in re.findall(r"\w+", q):
+            hit = _match_metric(w, metrics)
+            if hit:
+                return hit
+        return _preferred_metric(metrics)
+
+    def _percentile_value() -> float | None:
+        m = re.search(r"(\d{1,3})(?:st|nd|rd|th)\s*(?:percentile|quantile|percent)", q)
+        if m:
+            p = int(m.group(1))
+            if 0 < p < 100:
+                return p / 100.0
+        m = re.search(r"\b(top|bottom)\s+(\d{1,3})\s*%", q)
+        if m:
+            p = int(m.group(2))
+            if m.group(1) == "top":
+                return (100 - p) / 100.0
+            return p / 100.0
+        return None
+
+    col = _target_col()
+    if not col:
+        return None
+    qc = f'"{col}"'
+
+    if re.search(r"\bmedian\b", q):
+        return f'SELECT ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY {qc}), 2) AS median_{col} FROM "{table_name}"'
+    if re.search(r"\b(standard deviation|stddev|std dev|std deviation|deviation)\b", q):
+        return f'SELECT ROUND(STDDEV({qc}), 2) AS stddev_{col} FROM "{table_name}"'
+    if re.search(r"\bvariance\b", q):
+        return f'SELECT ROUND(VAR_SAMP({qc}), 2) AS variance_{col} FROM "{table_name}"'
+    if re.search(r"\b(percentile|quantile|quartile)\b", q):
+        p = _percentile_value()
+        if p is not None:
+            return f'SELECT ROUND(PERCENTILE_CONT({p}) WITHIN GROUP (ORDER BY {qc}), 2) AS percentile_{col} FROM "{table_name}"'
+    return None
 
 
 def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
@@ -24,6 +79,11 @@ def _local_nl_to_sql(question: str, table_name: str, columns_info: str) -> str:
     all_cols = ", ".join(f'"{c}"' for c in col_names)
 
     date_cols = [c["name"] for c in cols if "date" in c.get("dtype", "").lower() or "date" in c["name"].lower() or "time" in c["name"].lower()]
+
+    # ------- STATISTICAL INTENTS (median / stddev / variance / percentile) -------
+    stat_sql = _local_statistical_sql(question, table_name, columns_info)
+    if stat_sql:
+        return stat_sql
 
     # ------- CLASSIFY COLUMNS (avoid ID columns in aggregations) -------
     metric_cols = []
@@ -279,8 +339,11 @@ INTENT RULES - FOLLOW STRICTLY:
 - "Which Y has the highest/lowest X" -> SELECT Y, SUM(X) AS total_X FROM ... GROUP BY Y ORDER BY total_X DESC LIMIT 1
 - "Analyze", "Summary", "Overview", "Describe", "Give me N key insights", "Key metrics" -> SELECT COUNT(*), AVG(metrics), MIN(metrics), MAX(metrics) in a single row
 - "What percentage/share/proportion of X is Y?" -> SELECT the categorical column, SUM(CASE WHEN col='Y' THEN metric ELSE 0 END)*100.0/NULLIF(SUM(metric),0) AS percentage, and SUM(metric) AS total, in a single row. Never a GROUP BY here unless multiple values are requested.
+- STATISTICS: "median" -> PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY col); "standard deviation/stddev" -> STDDEV(col); "variance" -> VAR_SAMP(col); "Nth percentile/quantile" -> PERCENTILE_CONT(p) WITHIN GROUP (ORDER BY col). Only when a real numeric metric column exists. If no numeric column matches, respond with exactly: AI_ERROR_NO_STAT (no SQL).
 - If the question asks about a time trend (trend/over time/monthly/weekly/daily) but the dataset has NO date/time/month/year column, respond with exactly: AI_ERROR_NO_DATE (no SQL).
+- If the question asks for data the dataset does not contain (e.g. purchases/revenue/salary when only a supplier directory is uploaded), respond with exactly: AI_ERROR_INSUFFICIENT_DATA (no SQL). NEVER answer with COUNT(*) of rows you cannot semantically justify.
 - NEVER invent column names. Only reference columns listed in the metadata above.
+- NEVER answer a measure question (average/total/sum of a value) with COUNT(*). A record count is not a measure.
 """
         result = chat(system_prompt, question)
         if result and not result.startswith("AI_ERROR"):

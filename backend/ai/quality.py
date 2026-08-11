@@ -19,9 +19,26 @@ def _resolve_level(score: float) -> str:
 
 
 def generate_ai_quality(question: str, sql: str, chart_type: str, validation_result: dict,
-                        data_length: int, sql_success: bool = True, columns_info: str = "") -> dict:
+                        data_length: int, sql_success: bool = True, columns_info: str = "",
+                        sufficiency_verdict: dict = None, result_verdict: dict = None) -> dict:
     q = question.lower().strip()
     issues = validation_result.get("issues", [])[:]
+
+    # Sufficiency gate: an INSUFFICIENT/AMBIGUOUS verdict means the pipeline must
+    # not be presented as a confident success even if a query happened to run.
+    suf_status = (sufficiency_verdict or {}).get("status")
+    if suf_status == "insufficient":
+        issues.append("The uploaded data cannot answer this question; required data is missing.")
+    elif suf_status == "ambiguous":
+        issues.append("The question is ambiguous; clarification is needed before answering.")
+
+    # Post-execution question<->result check: a semantically wrong answer is a
+    # hard failure regardless of SQL validity.
+    result_status = (result_verdict or {}).get("status")
+    if result_status == "invalid":
+        issues.append(result_verdict.get("reason") or "The result does not answer the question.")
+    elif result_status == "questionable":
+        issues.append((result_verdict or {}).get("reason") or "The result only partially answers the question.")
 
     cols_meta = _parse_columns_info(columns_info) if columns_info else []
     biz_validation = _validate_business_question(question, cols_meta) if cols_meta else {}
@@ -76,6 +93,14 @@ def generate_ai_quality(question: str, sql: str, chart_type: str, validation_res
         reasons.append("generated SQL did not pass validation")
     if not sql_executed_successfully:
         reasons.append("SQL execution failed")
+    if result_status in ("invalid", "questionable"):
+        reasons.append(result_verdict.get("reason") or "result does not fully answer the question")
+        overall_score = min(overall_score, 55.0 if result_status == "questionable" else 30.0)
+        overall_score = round(overall_score * (0.6 if result_status == "questionable" else 0.4), 1)
+    if suf_status in ("insufficient", "ambiguous"):
+        reasons.append("question cannot be fully answered from the uploaded data")
+        overall_score = min(overall_score, 40.0)
+        overall_score = round(overall_score * 0.5, 1)
     if chart_type == "table" and data_length == 0:
         reasons.append("no rows returned, so no chart was possible")
     if overall_score < 80 and not reasons:

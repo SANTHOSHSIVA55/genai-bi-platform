@@ -15,6 +15,7 @@ import ChartDisplay from '../components/ChartDisplay';
 import SummaryPanel from '../components/SummaryPanel';
 import AIQualityBadge from '../components/AIQualityBadge';
 import PipelineStages from '../components/PipelineStages';
+import AnswerStatusBanner from '../components/AnswerStatusBanner';
 import DatasetProfile from '../components/DatasetProfile';
 import GuidancePanel from '../components/GuidancePanel';
 import ErrorPanel from '../components/ErrorPanel';
@@ -180,7 +181,9 @@ const Dashboard = () => {
     try {
       const res = await executeQuery(queryData);
       setQueryResult(res.data);
-      toast.success('Query executed successfully!');
+      if (!res.data.answer_status || res.data.answer_status === 'answered') {
+        toast.success('Query executed successfully!');
+      }
       const histRes = await getQueryHistory().catch(() => null);
       if (histRes) {
         setQueryHistory(Array.isArray(histRes.data) ? histRes.data : (histRes.data?.queries || []));
@@ -362,6 +365,15 @@ const Dashboard = () => {
                   <PipelineStages stages={queryResult.pipeline_stages} />
                 )}
 
+                {queryResult.answer_status && queryResult.answer_status !== 'answered' && (
+                  <AnswerStatusBanner
+                    answerStatus={queryResult.answer_status}
+                    sufficiency={queryResult.sufficiency}
+                    summary={queryResult.summary}
+                    datasetsUsed={queryResult.datasets_used}
+                  />
+                )}
+
                 {queryResult.chart_config?.title === 'Guidance' ? (
                   <GuidancePanel
                     message={(queryResult.summary?.executive_summary || [])[0] || 'Please ask a more specific question.'}
@@ -386,7 +398,7 @@ const Dashboard = () => {
                   />
                 )}
 
-                {queryResult.data && queryResult.data.length === 0 && !queryResult.generated_sql && (
+                {queryResult.data && queryResult.data.length === 0 && !queryResult.generated_sql && !queryResult.answer_status && (
                   <motion.div
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
