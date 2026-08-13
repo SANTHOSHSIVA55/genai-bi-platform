@@ -1,13 +1,16 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useDeferredValue } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   History, Search, Clock, MessageSquare, Database,
   ChevronDown, ChevronUp, Loader2, Code2, ArrowRight,
-  Calendar, Filter, AlertCircle, Trash2, Eraser, Copy
+  Calendar, Filter, AlertCircle, Trash2, Eraser, Copy,
+  ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { getQueryHistory, deleteHistoryEntry, clearQueryHistory } from '../api/api';
 import toast from 'react-hot-toast';
+
+const PAGE_SIZE = 50;
 
 const HistoryPage = () => {
   const navigate = useNavigate();
@@ -17,6 +20,7 @@ const HistoryPage = () => {
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState(null);
   const [sortOrder, setSortOrder] = useState('desc');
+  const [page, setPage] = useState(1);
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -38,29 +42,50 @@ const HistoryPage = () => {
     fetchHistory();
   }, [fetchHistory]);
 
+  // Deferred search keeps the input responsive: filtering/sorting run in the
+  // background instead of blocking every keystroke.
+  const deferredSearch = useDeferredValue(search);
+
   const filtered = useMemo(() => {
+    const term = deferredSearch.toLowerCase();
     return queries
       .filter((q) =>
-        q.question?.toLowerCase().includes(search.toLowerCase()) ||
-        q.dataset_name?.toLowerCase().includes(search.toLowerCase())
+        !term ||
+        q.question?.toLowerCase().includes(term) ||
+        q.dataset_name?.toLowerCase().includes(term)
       )
       .sort((a, b) => {
         const da = new Date(a.created_at);
         const db = new Date(b.created_at);
         return sortOrder === 'desc' ? db - da : da - db;
       });
-  }, [queries, search, sortOrder]);
+  }, [queries, deferredSearch, sortOrder]);
 
-  const formatTime = (iso) => {
-    const date = new Date(iso);
-    const now = new Date();
-    const diff = now - date;
-    if (diff < 60000) return 'Just now';
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
-    return date.toLocaleDateString();
-  };
+  // Reset to the first page whenever the visible set changes.
+  useEffect(() => { setPage(1); }, [deferredSearch, sortOrder]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const visible = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, page]);
+
+  // Formatted relative timestamps are computed once per history entry instead
+  // of rebuilding two Date objects per row on every render.
+  const timeText = useMemo(() => {
+    const map = {};
+    const now = Date.now();
+    for (const q of queries) {
+      const date = new Date(q.created_at);
+      const diff = now - date.getTime();
+      if (diff < 60000) map[q.id] = 'Just now';
+      else if (diff < 3600000) map[q.id] = `${Math.floor(diff / 60000)}m ago`;
+      else if (diff < 86400000) map[q.id] = `${Math.floor(diff / 3600000)}h ago`;
+      else if (diff < 604800000) map[q.id] = `${Math.floor(diff / 86400000)}d ago`;
+      else map[q.id] = date.toLocaleDateString();
+    }
+    return map;
+  }, [queries]);
 
   const getChartBadge = (type) => {
     const styles = {
@@ -199,13 +224,13 @@ const HistoryPage = () => {
       ) : (
         <div className="space-y-2.5">
           <AnimatePresence>
-            {filtered.map((q, i) => (
+            {visible.map((q, i) => (
               <motion.div
                 key={q.id}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
-                transition={{ delay: i * 0.03 }}
+                transition={{ delay: Math.min(i * 0.02, 0.3) }}
                 className="glass-card-hover overflow-hidden"
               >
                 <button
@@ -224,7 +249,7 @@ const HistoryPage = () => {
                       </span>
                       <span className="text-dark-500 text-xs flex items-center gap-1">
                         <Clock className="w-3 h-3" />
-                        {formatTime(q.created_at)}
+                        {timeText[q.id]}
                       </span>
                     </div>
                   </div>
@@ -295,6 +320,32 @@ const HistoryPage = () => {
               </motion.div>
             ))}
           </AnimatePresence>
+
+          {pageCount > 1 && (
+            <div className="flex items-center justify-between gap-3 pt-2">
+              <span className="text-xs text-dark-500">
+                Page {page} of {pageCount} &middot; {filtered.length} queries
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  className="p-2 rounded-lg bg-dark-800 hover:bg-dark-700 text-dark-300 border border-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed"
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                  disabled={page >= pageCount}
+                  className="p-2 rounded-lg bg-dark-800 hover:bg-dark-700 text-dark-300 border border-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed"
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

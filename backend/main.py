@@ -1,5 +1,6 @@
 import json
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -639,7 +640,15 @@ def dataset_profile(
     be derived from metadata alone (date range, per-category totals)."""
     dataset = _get_owned_dataset(dataset_id, current_user, db)
     cols_meta = _parse_columns_info(dataset.columns_info or "") if dataset.columns_info else []
-    profile = build_profile(dataset, cols_meta, engine)
+    version = _schema_version_hash({
+        "columns_info": dataset.columns_info or "",
+        "row_count": dataset.row_count,
+    })
+    profile_key = f"profile:{dataset.id}:{version}"
+    profile = get_cached(profile_key)
+    if profile is None:
+        profile = build_profile(dataset, cols_meta, engine)
+        put_cached(profile_key, profile, dataset_ids=[dataset.id])
     return DatasetProfileResponse(
         dataset=DatasetResponse.model_validate(dataset),
         currency=profile["currency"],
@@ -791,10 +800,24 @@ def _pipeline(n_done: int) -> list:
 
 
 def _owned_datasets(ids: list, current_user: User, db: Session) -> list:
-    """Load and own-check a list of dataset IDs, deduplicated, in order."""
+    """Load and own-check a list of dataset IDs, deduplicated, in order.
+
+    Uses a single batched query (the previous per-id loop issued N queries for
+    the N datasets a multi-table analysis selects). Error semantics match the
+    old per-id behavior: a missing id is a 404, an owned-by-others id a 403.
+    """
     unique_ids = list(dict.fromkeys(ids))
-    datasets = [_get_owned_dataset(did, current_user, db) for did in unique_ids]
-    return datasets
+    if not unique_ids:
+        return []
+    rows = db.query(Dataset).filter(Dataset.id.in_(unique_ids)).all()
+    by_id = {d.id: d for d in rows}
+    if len(by_id) != len(unique_ids):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if current_user.role != "admin":
+        unauthorized = [d for d in rows if d.owner_id != current_user.id]
+        if unauthorized:
+            raise HTTPException(status_code=403, detail="Access denied")
+    return [by_id[i] for i in unique_ids]
 
 
 def _guidance_response(question: str, message: str, cols_meta: list, n_stages: int,
@@ -911,9 +934,29 @@ def _insufficient_response(question: str, verdict: dict, cols_meta: list,
     )
 
 
+def _schema_version_hash(dataset: dict) -> str:
+    """Stable per-dataset version from its schema metadata + row count, so any
+    derived cache (profile, enrichment, relationships) is invalidated the moment
+    the underlying data changes."""
+    digest = hashlib.sha256((dataset.get("columns_info") or "").encode("utf-8")).hexdigest()[:16]
+    return f"{digest}:{dataset.get('row_count') or 0}"
+
+
+def _relationships_cache_key(datasets_meta: list) -> str:
+    """Cache key for relationship detection over the selected datasets. Because
+    the key embeds each dataset's schema version, results can never go stale."""
+    parts = "|".join(
+        f"{d['id']}:{_schema_version_hash(d)}"
+        for d in sorted(datasets_meta, key=lambda x: x["id"])
+    )
+    return "rels:" + hashlib.sha256(parts.encode("utf-8")).hexdigest()
+
+
 def _compute_enrichment(serialized_rows: list, cols_meta: list, dataset: Dataset, currency) -> dict:
     """For single-row aggregate results, compute the category breakdown so
-    summaries can name the leading category without guessing."""
+    summaries can name the leading category without guessing. Cached per
+    (dataset, metric, dimension, schema version) so different questions on the
+    same dataset reuse the breakdown instead of re-scanning the table."""
     if len(serialized_rows) != 1:
         return {}
     groups = classify_columns(cols_meta)
@@ -921,6 +964,14 @@ def _compute_enrichment(serialized_rows: list, cols_meta: list, dataset: Dataset
     dim = _preferred_category(groups["categorical"])
     if not metric or not dim or not dataset.table_name:
         return {}
+    version = _schema_version_hash({
+        "columns_info": dataset.columns_info or "",
+        "row_count": dataset.row_count,
+    })
+    cache_key = f"enrich:{dataset.id}:{metric}:{dim}:{version}"
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return cached
     try:
         with engine.connect() as conn:
             rows = conn.execute(text(
@@ -932,7 +983,7 @@ def _compute_enrichment(serialized_rows: list, cols_meta: list, dataset: Dataset
     except Exception as e:
         logger.warning("Enrichment failed for dataset %s: %s", dataset.id, e)
         return {}
-    return {
+    result = {
         "metric": metric,
         "dimension": dim,
         "by_dimension": [[r[0], float(r[1])] for r in rows],
@@ -940,6 +991,8 @@ def _compute_enrichment(serialized_rows: list, cols_meta: list, dataset: Dataset
         "row_count": dataset.row_count,
         "currency": currency,
     }
+    put_cached(cache_key, result, dataset_ids=[dataset.id])
+    return result
 
 
 # ──────────────────────────────────────────────
@@ -955,11 +1008,9 @@ def execute_nl_query(
     db: Session = Depends(get_db),
 ):
     # Load the primary dataset and, when provided, the additional datasets for
-    # multi-dataset analysis (relationships/JOINs).
-    primary = _get_owned_dataset(body.dataset_id, current_user, db)
+    # multi-dataset analysis (relationships/JOINs) in a single batched query.
     datasets = _owned_datasets([body.dataset_id] + (body.dataset_ids or []), current_user, db)
-    if len(datasets) == 1:
-        datasets = [primary]
+    primary = datasets[0]
     multi = len(datasets) > 1
 
     primary_columns_info = primary.columns_info or ""
@@ -1069,7 +1120,11 @@ def execute_nl_query(
     # ── SQL GENERATION ──────────────────────────────────────────────────────
     multi_plan = None
     if multi:
-        relationships = detect_relationships(engine, datasets_meta)
+        rel_key = _relationships_cache_key(datasets_meta)
+        relationships = get_cached(rel_key)
+        if relationships is None:
+            relationships = detect_relationships(engine, datasets_meta)
+            put_cached(rel_key, relationships, dataset_ids=[d["id"] for d in datasets_meta])
         multi_plan = build_multi_table_sql(question, datasets_meta, relationships)
 
     if multi_plan:
@@ -1118,20 +1173,16 @@ def execute_nl_query(
     # the deterministic local engine, which is schema-grounded and always
     # produces validatable SQL. Never surface an invalid AI query to execution.
     if not validation_result["valid"] and generation_route != "join":
-        regenerated_sql = nl_to_sql(question, primary.table_name, primary_columns_info)
-        revalidation = validate_sql_intent(question, regenerated_sql, primary.table_name, primary_columns_info)
-        if revalidation["valid"]:
-            generated_sql = regenerated_sql
-            validation_result = revalidation
+        # Skip the second AI attempt (a retry of the same prompt would reproduce
+        # the same rejection) and fall straight back to the deterministic local
+        # engine, which is schema-grounded and always produces validatable SQL.
+        local_sql = _local_nl_to_sql(question, primary.table_name, primary_columns_info)
+        local_validation = validate_sql_intent(question, local_sql, primary.table_name, primary_columns_info)
+        if local_validation["valid"]:
+            generated_sql = local_sql
+            validation_result = local_validation
         else:
-            local_sql = _local_nl_to_sql(question, primary.table_name, primary_columns_info)
-            local_validation = validate_sql_intent(question, local_sql, primary.table_name, primary_columns_info)
-            if local_validation["valid"]:
-                generated_sql = local_sql
-                validation_result = local_validation
-            else:
-                generated_sql = regenerated_sql
-                validation_result["issues"].extend(revalidation["issues"])
+            validation_result["issues"].extend(local_validation["issues"])
 
     # Safety validate SQL against the exact set of tables the query may touch.
     try:

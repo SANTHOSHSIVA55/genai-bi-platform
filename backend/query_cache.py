@@ -19,9 +19,17 @@ from typing import Any, Optional
 _CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
 _MAX_ENTRIES = 512
 
+# AI-completion cache: LLM calls are the slowest part of the pipeline, and SQL
+# generation is deterministic for a given (system, user) prompt. Kept in a
+# separate store so prompt-cache entries never evict query results.
+_AI_CACHE_TTL_SECONDS = 6 * 60 * 60  # 6 hours
+_AI_MAX_ENTRIES = 256
+
 _lock = threading.Lock()
 _store: dict = {}
 _by_dataset: dict = {}
+_ai_lock = threading.Lock()
+_ai_store: dict = {}
 
 
 def _schema_version(columns_info: str, row_count: Optional[int]) -> str:
@@ -89,3 +97,31 @@ def clear_query_cache(dataset_id: Optional[str] = None) -> None:
 def cache_stats() -> dict:
     with _lock:
         return {"entries": len(_store)}
+
+
+def get_ai_cached(key: str) -> Optional[str]:
+    """Return a cached AI completion, or None on miss/expiry."""
+    with _ai_lock:
+        item = _ai_store.get(key)
+        if not item:
+            return None
+        if time.time() - item["ts"] > _AI_CACHE_TTL_SECONDS:
+            del _ai_store[key]
+            return None
+        return item["data"]
+
+
+def put_ai_cached(key: str, data: str) -> None:
+    """Store an AI completion under its prompt hash. Evicts the oldest entry
+    when the AI cache is full."""
+    with _ai_lock:
+        if len(_ai_store) >= _AI_MAX_ENTRIES:
+            oldest = min(_ai_store.items(), key=lambda kv: kv[1]["ts"], default=None)
+            if oldest:
+                _ai_store.pop(oldest[0], None)
+        _ai_store[key] = {"data": data, "ts": time.time()}
+
+
+def ai_cache_stats() -> dict:
+    with _ai_lock:
+        return {"entries": len(_ai_store)}

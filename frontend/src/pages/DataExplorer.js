@@ -21,6 +21,44 @@ const typeIcon = (type) => {
   }
 };
 
+// Memoized row so re-renders from search/sort/page changes only touch the
+// cells that actually changed instead of rebuilding every <td>.
+const DataRow = React.memo(({ row, columns, rowKey }) => (
+  <tr className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
+    {columns.map((col) => (
+      <td key={col} className="px-4 py-3 text-dark-200 whitespace-nowrap max-w-[300px] truncate">
+        {row[col] == null ? <span className="text-dark-600">NULL</span> : String(row[col])}
+      </td>
+    ))}
+  </tr>
+));
+
+// Search lives in its own component so typing re-renders only this input; the
+// 300ms debounce then notifies the parent, which refetches rows.
+const SearchInput = ({ onDebouncedChange }) => {
+  const [search, setSearch] = useState('');
+  const timerRef = useRef(null);
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+  const onChange = (e) => {
+    const v = e.target.value;
+    setSearch(v);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => onDebouncedChange(v), 300);
+  };
+  return (
+    <div className="relative flex-1">
+      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-500" />
+      <input
+        type="text"
+        value={search}
+        onChange={onChange}
+        placeholder="Search across all columns..."
+        className="input-field pl-10"
+      />
+    </div>
+  );
+};
+
 const DataExplorer = () => {
   const navigate = useNavigate();
   const [datasets, setDatasets] = useState([]);
@@ -29,7 +67,6 @@ const DataExplorer = () => {
   const [pageSize, setPageSize] = useState(50);
   const [sortBy, setSortBy] = useState('');
   const [sortDir, setSortDir] = useState('asc');
-  const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [rows, setRows] = useState([]);
   const [columns, setColumns] = useState([]);
@@ -39,7 +76,6 @@ const DataExplorer = () => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const searchTimer = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,15 +90,11 @@ const DataExplorer = () => {
     return () => { cancelled = true; };
   }, []);
 
-  // Debounce the search box so typing stays responsive.
-  useEffect(() => {
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => setDebouncedSearch(search), 300);
-    return () => clearTimeout(searchTimer.current);
-  }, [search]);
-
   // Reset pagination when the dataset or page size changes.
   const resetToFirstPage = useCallback(() => setPage(1), []);
+
+  // Switching datasets clears any stale search term (the input remounts too).
+  useEffect(() => { setDebouncedSearch(''); }, [selectedId]);
 
   useEffect(() => { resetToFirstPage(); }, [selectedId, debouncedSearch, pageSize, resetToFirstPage]);
 
@@ -166,7 +198,7 @@ const DataExplorer = () => {
           <Database className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-500" />
           <select
             value={selectedId}
-            onChange={(e) => { setSelectedId(e.target.value); setSearch(''); setSortBy(''); }}
+            onChange={(e) => { setSelectedId(e.target.value); setSortBy(''); }}
             className="input-field pl-10 appearance-none cursor-pointer"
             aria-label="Select dataset"
           >
@@ -180,16 +212,7 @@ const DataExplorer = () => {
           <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-dark-400 pointer-events-none" />
         </div>
 
-        <div className="relative flex-1">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-500" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search across all columns..."
-            className="input-field pl-10"
-          />
-        </div>
+        <SearchInput key={selectedId || 'none'} onDebouncedChange={setDebouncedSearch} />
 
         {selectedDs && (
           <button
@@ -273,13 +296,11 @@ const DataExplorer = () => {
                       </tr>
                     ) : (
                       rows.map((row, i) => (
-                        <tr key={i} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
-                          {columns.map((col) => (
-                            <td key={col} className="px-4 py-3 text-dark-200 whitespace-nowrap max-w-[300px] truncate">
-                              {row[col] == null ? <span className="text-dark-600">NULL</span> : String(row[col])}
-                            </td>
-                          ))}
-                        </tr>
+                        <DataRow
+                          key={row[columns[0]] != null ? `${String(row[columns[0]])}-${i}` : i}
+                          row={row}
+                          columns={columns}
+                        />
                       ))
                     )}
                   </tbody>

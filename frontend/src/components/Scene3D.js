@@ -1,15 +1,35 @@
 import React from 'react';
 
-/* ───── Ambient Pulsing Blob ───── */
-// Static blurred gradient blob. Kept as a static layer instead of an infinite
-// CSS animation: a `blur(100px)` element repainting continuously is a real
-// GPU/CPU cost on low-end machines and contributes to jank while scrolling.
-const AmbientBlob = ({ className = '', style = {} }) => (
+/* ───── Ambient Blob ───── */
+// Soft gradient blob rendered with a radial gradient instead of a CSS
+// `blur()` filter. A large blurred layer is a real GPU/CPU cost on low-end
+// machines (it forces a separate composited texture and re-blurs on resize),
+// so the "blurred" look is baked into the gradient itself.
+const AmbientBlob = ({ color = 'rgba(255, 59, 48, 0.4)', className = '' }) => (
   <div
-    className={`absolute rounded-full filter blur-[60px] opacity-20 ${className}`}
-    style={style}
+    className={`absolute rounded-full opacity-20 ${className}`}
+    style={{ background: `radial-gradient(circle at center, ${color} 0%, transparent 70%)` }}
   />
 );
+
+// Pause every CSS animation on the page when the tab is hidden or the user
+// prefers reduced motion. `.motion-paused *` in index.css applies
+// `animation-play-state: paused` to each animated descendant.
+const usePauseWhenHidden = () => {
+  const [paused, setPaused] = React.useState(false);
+  React.useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setPaused(mq.matches || document.hidden);
+    update();
+    mq.addEventListener?.('change', update);
+    document.addEventListener('visibilitychange', update);
+    return () => {
+      mq.removeEventListener?.('change', update);
+      document.removeEventListener('visibilitychange', update);
+    };
+  }, []);
+  return paused;
+};
 
 /* ───── Rotating SVG Ring ───── */
 const SVGRing = ({ size = 200, color = '#ff3b30', duration = 20, reverse = false }) => (
@@ -64,35 +84,38 @@ const SVGNetwork = () => (
 /* ═══════ SCENE PRESETS ═══════ */
 
 // Landing Page — big hero scene
-export const HeroScene = () => (
-  <div className="absolute inset-0 bg-dark-950 overflow-hidden select-none pointer-events-none">
-    {/* Animated glow blobs */}
-    <AmbientBlob className="bg-primary-600/10 w-[600px] h-[600px] -top-[10%] -left-[10%]" style={{ animationDuration: '8s' }} />
-    <AmbientBlob className="bg-red-600/10 w-[500px] h-[500px] top-[30%] -right-[10%]" style={{ animationDuration: '12s' }} />
-    <AmbientBlob className="bg-primary-800/10 w-[700px] h-[700px] -bottom-[20%] left-[20%]" style={{ animationDuration: '15s' }} />
+export const HeroScene = () => {
+  const paused = usePauseWhenHidden();
+  return (
+    <div className={`absolute inset-0 bg-dark-950 overflow-hidden select-none pointer-events-none ${paused ? 'motion-paused' : ''}`}>
+      {/* Static glow blobs (pre-blurred radial gradients, no CSS blur) */}
+      <AmbientBlob color="rgba(224, 32, 32, 0.5)" className="w-[600px] h-[600px] -top-[10%] -left-[10%]" />
+      <AmbientBlob color="rgba(220, 38, 38, 0.5)" className="w-[500px] h-[500px] top-[30%] -right-[10%]" />
+      <AmbientBlob color="rgba(163, 20, 20, 0.5)" className="w-[700px] h-[700px] -bottom-[20%] left-[20%]" />
 
-    {/* Elegant interactive circles */}
-    <div className="absolute inset-0 flex items-center justify-center">
-      <div className="relative w-[300px] h-[300px]">
-        <SVGRing size={300} color="#ff3b30" duration={30} />
-        <SVGRing size={360} color="#ff9500" duration={45} reverse />
-        <SVGRing size={420} color="#ff2d55" duration={60} />
-        {/* Glowing center sphere */}
-        <div className="absolute inset-0 m-auto w-32 h-32 rounded-full bg-gradient-to-br from-primary-500 to-red-600 opacity-60 blur-md animate-[pulse_4s_infinite]" />
+      {/* Elegant interactive circles */}
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="relative w-[300px] h-[300px]">
+          <SVGRing size={300} color="#ff3b30" duration={30} />
+          <SVGRing size={360} color="#ff9500" duration={45} reverse />
+          <SVGRing size={420} color="#ff2d55" duration={60} />
+          {/* Glowing center sphere — opacity-only pulse, no per-frame blur */}
+          <div className="absolute inset-0 m-auto w-32 h-32 rounded-full bg-gradient-to-br from-primary-500 to-red-600 opacity-60 animate-[pulse_4s_infinite]" />
+        </div>
       </div>
-    </div>
 
-    {/* SVG background grid */}
-    <div className="absolute inset-0 opacity-[0.03] bg-[linear-gradient(to_right,#808080_1px,transparent_1px),linear-gradient(to_bottom,#808080_1px,transparent_1px)] bg-[size:24px_24px]" />
-    <SVGNetwork />
-  </div>
-);
+      {/* SVG background grid */}
+      <div className="absolute inset-0 opacity-[0.03] bg-[linear-gradient(to_right,#808080_1px,transparent_1px),linear-gradient(to_bottom,#808080_1px,transparent_1px)] bg-[size:24px_24px]" />
+      <SVGNetwork />
+    </div>
+  );
+};
 
 // Dashboard — subtle background scene
 export const DashboardScene = () => (
   <div className="absolute inset-0 bg-dark-950 overflow-hidden select-none pointer-events-none">
-    <AmbientBlob className="bg-primary-600/5 w-[500px] h-[500px] top-[10%] left-[10%]" style={{ animationDuration: '15s' }} />
-    <AmbientBlob className="bg-red-600/5 w-[400px] h-[400px] bottom-[10%] right-[10%]" style={{ animationDuration: '20s' }} />
+    <AmbientBlob color="rgba(224, 32, 32, 0.4)" className="w-[500px] h-[500px] top-[10%] left-[10%]" />
+    <AmbientBlob color="rgba(220, 38, 38, 0.4)" className="w-[400px] h-[400px] bottom-[10%] right-[10%]" />
     <div className="absolute inset-0 opacity-[0.015] bg-[linear-gradient(to_right,#808080_1px,transparent_1px),linear-gradient(to_bottom,#808080_1px,transparent_1px)] bg-[size:32px_32px]" />
   </div>
 );
@@ -100,8 +123,8 @@ export const DashboardScene = () => (
 // Auth pages — elegant scene
 export const AuthScene = () => (
   <div className="absolute inset-0 bg-dark-950 overflow-hidden select-none pointer-events-none">
-    <AmbientBlob className="bg-primary-600/8 w-[400px] h-[400px] -top-[10%] -left-[10%]" style={{ animationDuration: '12s' }} />
-    <AmbientBlob className="bg-red-600/8 w-[400px] h-[400px] -bottom-[10%] -right-[10%]" style={{ animationDuration: '16s' }} />
+    <AmbientBlob color="rgba(224, 32, 32, 0.5)" className="w-[400px] h-[400px] -top-[10%] -left-[10%]" />
+    <AmbientBlob color="rgba(220, 38, 38, 0.5)" className="w-[400px] h-[400px] -bottom-[10%] -right-[10%]" />
   </div>
 );
 

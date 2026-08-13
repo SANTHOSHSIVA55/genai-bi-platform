@@ -128,6 +128,13 @@ const Dashboard = () => {
   // Query latency from the backend pipeline timings (also proves cache hits).
   const queryTimings = useMemo(() => queryResult?.pipeline_timings_ms || null, [queryResult]);
 
+  // Intent regex runs once per result instead of on every dashboard render, so
+  // the prop passed to the memoized ChartDisplay stays referentially stable.
+  const intentType = useMemo(
+    () => (queryResult ? detectIntentType(queryResult.question) : 'list'),
+    [queryResult]
+  );
+
   useEffect(() => {
     const state = location.state;
     if (state?.question) {
@@ -233,10 +240,22 @@ const Dashboard = () => {
           },
         ]);
       }
-      const histRes = await getQueryHistory().catch(() => null);
-      if (histRes) {
-        setQueryHistory(Array.isArray(histRes.data) ? histRes.data : (histRes.data?.queries || []));
-      }
+      // Update the Recent Queries panel and the "Queries Run" KPI locally
+      // instead of refetching the whole history (a second full network call +
+      // full-dashboard re-render right after the fresh chart just mounted).
+      setQueryHistory((prev) => {
+        const entry = {
+          id: res.data.id || `local-${Date.now()}`,
+          question: res.data.question || queryData.question,
+          dataset_id: datasetId,
+          dataset_name: datasets.find((d) => d.id === datasetId)?.name,
+          created_at: new Date().toISOString(),
+          chart_type: res.data.chart_type,
+          row_count: res.data.data ? res.data.data.length : null,
+          generated_sql: res.data.generated_sql,
+        };
+        return [entry, ...prev.filter((x) => x.id !== entry.id)].slice(0, 100);
+      });
     } catch (err) {
       if (axios.isCancel(err)) {
         return; // Request was aborted by newer query
@@ -502,7 +521,7 @@ const Dashboard = () => {
                 <ChartDisplay
                   data={queryResult.data}
                   chartConfig={queryResult.chart_config}
-                  intentType={detectIntentType(queryResult.question)}
+                  intentType={intentType}
                   currency={queryResult.currency}
                   semanticTypes={queryResult.semantic_types}
                 />

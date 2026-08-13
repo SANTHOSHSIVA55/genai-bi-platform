@@ -4,11 +4,14 @@ Encapsulates access to the generative-AI backend so that swapping providers does
 not require changes elsewhere in the application. When no provider is configured
 (no NVIDIA_API_KEY), the application transparently uses the local NL->SQL engine.
 """
+import hashlib
 import logging
 import os
 from typing import Optional
 
 from dotenv import load_dotenv
+
+from query_cache import get_ai_cached, put_ai_cached
 
 load_dotenv()
 
@@ -18,7 +21,9 @@ NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 USE_AI = bool(NVIDIA_API_KEY and len(NVIDIA_API_KEY.strip()) > 10)
 MODEL = os.getenv("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-pro")
 BASE_URL = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
-TIMEOUT_SECONDS = int(os.getenv("AI_TIMEOUT_SECONDS", "60"))
+# LLM calls cap the pipeline latency; 15s keeps interactive questions snappy and
+# still allows the model to finish. Overridable via AI_TIMEOUT_SECONDS.
+TIMEOUT_SECONDS = int(os.getenv("AI_TIMEOUT_SECONDS", "15"))
 MAX_TOKENS = int(os.getenv("AI_MAX_TOKENS", "2048"))
 
 _client = None
@@ -59,6 +64,13 @@ def chat(system: str, user: str, temperature: float = 0.2) -> str:
     client = _get_client()
     if client is None:
         return ""
+    # Deterministic prompts (SQL generation includes the schema in the system
+    # prompt, so schema changes change the key) can be served from cache, which
+    # removes the slowest component of repeated/re-tried questions.
+    key = hashlib.sha256(f"{MODEL}|{temperature}|{system}|{user}".encode("utf-8")).hexdigest()
+    cached = get_ai_cached(key)
+    if cached is not None:
+        return cached
     try:
         response = client.chat.completions.create(
             model=MODEL,
@@ -69,10 +81,15 @@ def chat(system: str, user: str, temperature: float = 0.2) -> str:
             temperature=temperature,
             max_tokens=MAX_TOKENS,
         )
-        return response.choices[0].message.content.strip()
+        result = response.choices[0].message.content.strip()
     except Exception as exc:
         logger.warning("AI provider request failed: %s", exc)
         return f"AI_ERROR: {str(exc)}"
+    # Never cache failures or empty responses: a transient error must be retried
+    # rather than replayed.
+    if result and not result.startswith("AI_ERROR"):
+        put_ai_cached(key, result)
+    return result
 
 
 def provider_info() -> dict:

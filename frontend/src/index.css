@@ -52,6 +52,14 @@
   }
 }
 
+/* Pause all CSS animations when a scene is hidden (tab in background or
+   prefers-reduced-motion). Applies per-descendant, so it stops infinite
+   spinning/pulsing without recomposing the page. */
+.motion-paused,
+.motion-paused * {
+  animation-play-state: paused !important;
+}
+
 @layer components {
   /* Apple macOS-style glass card - deep black with premium translucency */
   .glass-card {

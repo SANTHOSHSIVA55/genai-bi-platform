@@ -22,6 +22,12 @@ const COLORS = [
 const CHART_DATA_CAP = 60;
 const SCATTER_DATA_CAP = 200;
 
+// Recharts re-animates every series from scratch on each data change unless
+// disabled; the entrance animation janks the dashboard exactly when a fresh
+// result just mounted, so it is turned off everywhere.
+const TICK_STYLE = { fill: '#8e8e93', fontSize: 11, fontFamily: 'Inter, sans-serif' };
+const GRID_STYLE = { strokeDasharray: '3 3', stroke: '#2c2c2e' };
+
 const isAnalysisResult = (data, chartType) => {
   if (!data || data.length !== 1 || chartType !== 'kpi') return false;
   const cols = Object.keys(data[0] || {});
@@ -160,40 +166,44 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
   const autoChartType = chartConfig.chart_type || 'table';
   const chartType = selectedChartType === 'auto' ? autoChartType : selectedChartType;
 
-  const columns = safeData.length > 0 ? Object.keys(safeData[0]) : [];
-  const xKey = smartAxisKey(safeData, columns, chartConfig.x_axis);
-  const yKey = smartAxisKey(safeData, columns, chartConfig.y_axis);
+  const columns = useMemo(
+    () => (safeData.length > 0 ? Object.keys(safeData[0]) : []),
+    [safeData]
+  );
+  const xKey = useMemo(() => smartAxisKey(safeData, columns, chartConfig.x_axis), [safeData, columns, chartConfig]);
+  const yKey = useMemo(() => smartAxisKey(safeData, columns, chartConfig.y_axis), [safeData, columns, chartConfig]);
   const title = chartConfig.title || 'Query Results';
 
-  const numericCols = columns.filter(c => typeof safeData[0]?.[c] === 'number');
+  const numericCols = useMemo(
+    () => columns.filter(c => typeof safeData[0]?.[c] === 'number'),
+    [columns, safeData]
+  );
   const hasMultiY = numericCols.length > 1 && chartType !== 'pie';
 
   const isRanking = intentType === 'ranking' || columns.length === 2;
 
-  // Reusable styles
-  const tickStyle = { fill: '#8e8e93', fontSize: 11, fontFamily: 'Inter, sans-serif' };
-  const gridStyle = { strokeDasharray: '3 3', stroke: '#2c2c2e' };
-
-  const axisTick = (v) => {
-    const col = numericCols[0] || yKey;
-    const st = (semanticTypes || {})[col];
-    if (typeof v === 'number') {
-      if (st === 'count') return formatNumber(v);
-      if (st === 'percentage') return formatNumber(v) + '%';
-      if (st === 'currency') return money(v);
-      return currency ? currency + formatNumber(v) : formatNumber(v);
-    }
-    if (st === 'date' && typeof v === 'string') {
-      const d = new Date(v);
-      if (!isNaN(d.getTime())) {
-        const month = d.toLocaleString('en', { month: 'short' });
-        return d.getFullYear() === new Date().getFullYear()
-          ? month
-          : `${month} '${String(d.getFullYear()).slice(2)}`;
+  const axisTick = useMemo(() => {
+    return (v) => {
+      const col = numericCols[0] || yKey;
+      const st = (semanticTypes || {})[col];
+      if (typeof v === 'number') {
+        if (st === 'count') return formatNumber(v);
+        if (st === 'percentage') return formatNumber(v) + '%';
+        if (st === 'currency') return money(v);
+        return currency ? currency + formatNumber(v) : formatNumber(v);
       }
-    }
-    return String(v);
-  };
+      if (st === 'date' && typeof v === 'string') {
+        const d = new Date(v);
+        if (!isNaN(d.getTime())) {
+          const month = d.toLocaleString('en', { month: 'short' });
+          return d.getFullYear() === new Date().getFullYear()
+            ? month
+            : `${month} '${String(d.getFullYear()).slice(2)}`;
+        }
+      }
+      return String(v);
+    };
+  }, [numericCols, yKey, semanticTypes, money, currency]);
 
   // Multi-KPI analysis result grid
   if (isAnalysisResult(safeData, chartType)) {
@@ -262,11 +272,11 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
       return (
         <ResponsiveContainer width="100%" height={Math.max(200, sorted.length * 36)}>
           <BarChart data={sorted} layout="vertical" margin={{ top: 10, right: 30, left: 100, bottom: 10 }}>
-            <CartesianGrid {...gridStyle} horizontal={false} />
-            <XAxis type="number" tick={tickStyle} tickFormatter={axisTick} />
-            <YAxis dataKey={xKey} type="category" tick={tickStyle} width={90} tickLine={false} axisLine={false} />
+            <CartesianGrid {...GRID_STYLE} horizontal={false} />
+            <XAxis type="number" tick={TICK_STYLE} tickFormatter={axisTick} />
+            <YAxis dataKey={xKey} type="category" tick={TICK_STYLE} width={90} tickLine={false} axisLine={false} />
             <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
-            <Bar dataKey={yKey} fill="url(#barGrad)" radius={[0, 4, 4, 0]} maxBarSize={24} />
+            <Bar dataKey={yKey} fill="url(#barGrad)" radius={[0, 4, 4, 0]} maxBarSize={24} isAnimationActive={false} />
             <defs>
               <linearGradient id="barGrad" x1="0" y1="0" x2="1" y2="0">
                 <stop offset="0%" stopColor="#ff3b30" />
@@ -281,17 +291,17 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
     return (
       <ResponsiveContainer width="100%" height={400}>
         <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-          <CartesianGrid {...gridStyle} />
-          <XAxis dataKey={xKey} tick={tickStyle} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
-          <YAxis tick={tickStyle} tickFormatter={axisTick} />
+          <CartesianGrid {...GRID_STYLE} />
+          <XAxis dataKey={xKey} tick={TICK_STYLE} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
+          <YAxis tick={TICK_STYLE} tickFormatter={axisTick} />
           <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
           <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
           {hasMultiY ? (
             numericCols.map((col, i) => (
-              <Bar key={col} dataKey={col} fill={COLORS[i % COLORS.length]} radius={[4, 4, 0, 0]} />
+              <Bar key={col} dataKey={col} fill={COLORS[i % COLORS.length]} radius={[4, 4, 0, 0]} isAnimationActive={false} />
             ))
           ) : (
-            <Bar dataKey={yKey} fill="url(#barGradV)" radius={[4, 4, 0, 0]} />
+            <Bar dataKey={yKey} fill="url(#barGradV)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
           )}
           <defs>
             <linearGradient id="barGradV" x1="0" y1="0" x2="0" y2="1">
@@ -308,20 +318,20 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
     <ResponsiveContainer width="100%" height={400}>
       <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
         <CartesianGrid {...gridStyle} />
-        <XAxis dataKey={xKey} tick={tickStyle} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
-        <YAxis tick={tickStyle} tickFormatter={axisTick} />
+        <XAxis dataKey={xKey} tick={TICK_STYLE} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
+        <YAxis tick={TICK_STYLE} tickFormatter={axisTick} />
         <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
         <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
         {hasMultiY ? (
           numericCols.map((col, i) => (
             <Line key={col} type="monotone" dataKey={col} stroke={COLORS[i % COLORS.length]} strokeWidth={2.5}
               dot={{ fill: COLORS[i % COLORS.length], r: 4, strokeWidth: 2, stroke: '#1c1c1e' }}
-              activeDot={{ r: 7, strokeWidth: 2 }} />
+              activeDot={{ r: 7, strokeWidth: 2 }} isAnimationActive={false} />
           ))
         ) : (
           <Line type="monotone" dataKey={yKey} stroke="#ff3b30" strokeWidth={3}
             dot={{ fill: '#ff3b30', r: 5, strokeWidth: 2, stroke: '#1c1c1e' }}
-            activeDot={{ r: 8, fill: '#ff6b6b', stroke: '#1c1c1e', strokeWidth: 2 }} />
+            activeDot={{ r: 8, fill: '#ff6b6b', stroke: '#1c1c1e', strokeWidth: 2 }} isAnimationActive={false} />
         )}
       </LineChart>
     </ResponsiveContainer>
@@ -331,17 +341,17 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
     <ResponsiveContainer width="100%" height={400}>
       <AreaChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
         <CartesianGrid {...gridStyle} />
-        <XAxis dataKey={xKey} tick={tickStyle} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
-        <YAxis tick={tickStyle} tickFormatter={axisTick} />
+        <XAxis dataKey={xKey} tick={TICK_STYLE} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
+        <YAxis tick={TICK_STYLE} tickFormatter={axisTick} />
         <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
         <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
         {hasMultiY ? (
           numericCols.map((col, i) => (
             <Area key={col} type="monotone" dataKey={col} stroke={COLORS[i % COLORS.length]} fill={COLORS[i % COLORS.length]}
-              fillOpacity={0.1} strokeWidth={2.5} />
+              fillOpacity={0.1} strokeWidth={2.5} isAnimationActive={false} />
           ))
         ) : (
-          <Area type="monotone" dataKey={yKey} stroke="#ff3b30" fill="url(#areaGrad)" strokeWidth={3} />
+          <Area type="monotone" dataKey={yKey} stroke="#ff3b30" fill="url(#areaGrad)" strokeWidth={3} isAnimationActive={false} />
         )}
         <defs>
           <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -359,7 +369,8 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
       <ResponsiveContainer width="100%" height={400}>
         <PieChart>
           <Pie data={pieData} dataKey={yKey} nameKey={xKey} cx="50%" cy="50%" outerRadius={150} innerRadius={isDonut ? 80 : 0}
-            paddingAngle={3} label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+            paddingAngle={3} isAnimationActive={false}
+            label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
             labelLine={{ stroke: '#48484a' }}>
             {pieData.map((_, i) => (
               <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="#1c1c1e" strokeWidth={2} />
@@ -376,11 +387,11 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
     <ResponsiveContainer width="100%" height={400}>
       <ScatterChart margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
         <CartesianGrid {...gridStyle} />
-        <XAxis type="category" dataKey={xKey} name={xKey} tick={tickStyle} />
-        <YAxis type="number" dataKey={yKey} name={yKey} tick={tickStyle} tickFormatter={axisTick} />
+        <XAxis type="category" dataKey={xKey} name={xKey} tick={TICK_STYLE} />
+        <YAxis type="number" dataKey={yKey} name={yKey} tick={TICK_STYLE} tickFormatter={axisTick} />
         <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
         <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
-        <Scatter name={`${yKey} by ${xKey}`} data={chartData} fill="#ff3b30" />
+        <Scatter name={`${yKey} by ${xKey}`} data={chartData} fill="#ff3b30" isAnimationActive={false} />
       </ScatterChart>
     </ResponsiveContainer>
   );
@@ -401,7 +412,7 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
           </thead>
           <tbody>
             {safeData.slice(0, 100).map((row, i) => (
-              <tr key={i} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
+              <tr key={row[xKey] != null ? `${String(row[xKey])}-${i}` : i} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
                 {columns.map((col) => (
                   <td key={col} className="px-4 py-3 text-dark-200">
                     {renderValue(col, row[col])}
@@ -540,4 +551,6 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
   );
 };
 
-export default ChartDisplay;
+// Memoized so Dashboard re-renders (history/loading/conversation toggles) do
+// not rebuild the full recharts tree when the data props are unchanged.
+export default React.memo(ChartDisplay);

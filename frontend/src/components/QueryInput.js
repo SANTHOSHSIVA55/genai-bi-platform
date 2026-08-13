@@ -46,11 +46,16 @@ const QueryInput = ({ datasets, onSubmit, loading, initialQuestion = '', initial
   }, [initialQuestion]);
 
   // Schema-aware quick questions for the selected dataset
+  const questionsRequestRef = useRef(0);
   const loadQuestions = useCallback(async (datasetId) => {
     if (!datasetId) return;
+    // Rapidly switching datasets can resolve out of order; ignore stale
+    // responses so suggestions never belong to the wrong dataset.
+    const requestId = ++questionsRequestRef.current;
     setQuestionsLoading(true);
     try {
       const res = await getDatasetQuestions(datasetId);
+      if (requestId !== questionsRequestRef.current) return;
       const q = res.data || {};
       setQuestions({
         overview: q.overview || [],
@@ -58,9 +63,10 @@ const QueryInput = ({ datasets, onSubmit, loading, initialQuestion = '', initial
         insights: q.insights || [],
       });
     } catch (err) {
+      if (requestId !== questionsRequestRef.current) return;
       setQuestions({ overview: [], category: [], insights: [] });
     } finally {
-      setQuestionsLoading(false);
+      if (requestId === questionsRequestRef.current) setQuestionsLoading(false);
     }
   }, []);
 

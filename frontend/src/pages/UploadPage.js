@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload, Database, Trash2, FileSpreadsheet, FileText,
@@ -71,6 +71,15 @@ const UploadPage = () => {
 
   const totalSize = datasets.reduce((s, d) => s + (d.file_size || 0), 0);
   const totalRows = datasets.reduce((s, d) => s + (d.row_count || 0), 0);
+
+  // Formatted upload dates computed once per dataset, not per row per render.
+  const dateText = useMemo(() => {
+    const map = {};
+    for (const d of datasets) {
+      map[d.id] = d.created_at ? new Date(d.created_at).toLocaleDateString() : '\u2014';
+    }
+    return map;
+  }, [datasets]);
 
   return (
     <div className="space-y-6">
@@ -203,7 +212,7 @@ const UploadPage = () => {
                       initial={{ opacity: 0, x: -8 }}
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: 8 }}
-                      transition={{ delay: i * 0.04 }}
+                      transition={{ delay: Math.min(i * 0.04, 0.3) }}
                       className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors"
                     >
                       <td className="px-4 py-4">
@@ -218,7 +227,7 @@ const UploadPage = () => {
                       <td className="px-4 py-4 text-right text-dark-300 text-sm">{(ds.row_count || 0).toLocaleString()}</td>
                       <td className="px-4 py-4 text-right text-dark-300 text-sm">{ds.column_count || 0}</td>
                       <td className="px-4 py-4 text-right text-dark-400 text-sm">{formatFileSize(ds.file_size)}</td>
-                      <td className="px-4 py-4 text-right text-dark-500 text-sm">{ds.created_at ? new Date(ds.created_at).toLocaleDateString() : '\u2014'}</td>
+                      <td className="px-4 py-4 text-right text-dark-500 text-sm">{dateText[ds.id]}</td>
                       <td className="px-4 py-4 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <button

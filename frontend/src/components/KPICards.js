@@ -7,19 +7,33 @@ import SkeletonLoader from './SkeletonLoader';
 const useCountUp = (end, duration = 1000) => {
   const [count, setCount] = useState(0);
   const ref = useRef(null);
+  // The count-up plays once on first mount; later value changes (new queries,
+  // data refreshes) render the final number directly instead of firing four
+  // more rAF loops at 60fps on top of a dashboard re-render.
+  const animatedRef = useRef(false);
 
   useEffect(() => {
-    if (!end || end === 0) { setCount(0); return; }
     const numEnd = typeof end === 'string' ? parseInt(end.replace(/,/g, ''), 10) : end;
-    if (isNaN(numEnd)) { setCount(0); return; }
+    const target = isNaN(numEnd) ? 0 : numEnd;
+
+    const reducedMotion = typeof window !== 'undefined'
+      && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+
+    if (reducedMotion || animatedRef.current) {
+      setCount(target);
+      return;
+    }
+    animatedRef.current = true;
+    if (target === 0) { setCount(0); return; }
 
     let startTime = null;
     const step = (timestamp) => {
       if (!startTime) startTime = timestamp;
       const progress = Math.min((timestamp - startTime) / duration, 1);
       const eased = 1 - Math.pow(1 - progress, 3);
-      setCount(Math.floor(eased * numEnd));
+      setCount(Math.floor(eased * target));
       if (progress < 1) ref.current = requestAnimationFrame(step);
+      else setCount(target);
     };
     ref.current = requestAnimationFrame(step);
     return () => { if (ref.current) cancelAnimationFrame(ref.current); };
@@ -102,4 +116,4 @@ const KPICards = ({ datasets, queryCount, loading }) => {
   );
 };
 
-export default KPICards;
+export default React.memo(KPICards);
