@@ -15,6 +15,7 @@ const VerifyEmail = lazy(() => import('./pages/VerifyEmail'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const UploadPage = lazy(() => import('./pages/UploadPage'));
 const HistoryPage = lazy(() => import('./pages/HistoryPage'));
+const DataExplorer = lazy(() => import('./pages/DataExplorer'));
 
 const AppLayout = ({ children }) => (
   <div className="min-h-screen bg-dark-950 grid-bg relative">
@@ -112,6 +113,16 @@ const App = () => (
                 <ProtectedRoute>
                   <AppLayout>
                     <HistoryPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/explorer"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <DataExplorer />
                   </AppLayout>
                 </ProtectedRoute>
               }

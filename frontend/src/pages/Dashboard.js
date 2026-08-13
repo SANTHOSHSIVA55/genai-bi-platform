@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles, Database, Clock, RefreshCw,
   AlertCircle, BarChart3, Loader2, Eye,
   ChevronDown, ChevronUp, Code, Brain,
-  Download, FileJson, Table2
+  Download, FileJson, Table2, MessageSquarePlus, Zap
 } from 'lucide-react';
+import axios from 'axios';
 import { getDatasets, getQueryHistory, executeQuery, getDatasetProfile } from '../api/api';
 import { DashboardScene } from '../components/Scene3D';
 import KPICards from '../components/KPICards';
@@ -20,6 +21,7 @@ import DatasetProfile from '../components/DatasetProfile';
 import GuidancePanel from '../components/GuidancePanel';
 import ErrorPanel from '../components/ErrorPanel';
 import DatasetPreviewModal from '../components/DatasetPreviewModal';
+import SkeletonLoader from '../components/SkeletonLoader';
 import { exportCsv, downloadJson } from '../utils/export';
 import toast from 'react-hot-toast';
 
@@ -106,6 +108,7 @@ const detectIntentType = (question) => {
 
 const Dashboard = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const [datasets, setDatasets] = useState([]);
   const [queryHistory, setQueryHistory] = useState([]);
   const [queryResult, setQueryResult] = useState(null);
@@ -118,14 +121,20 @@ const Dashboard = () => {
   const [profile, setProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const lastDatasetId = useRef(null);
+  const abortControllerRef = useRef(null);
+  const conversationDatasetRef = useRef(null);
+  const [conversation, setConversation] = useState([]);
+
+  // Query latency from the backend pipeline timings (also proves cache hits).
+  const queryTimings = useMemo(() => queryResult?.pipeline_timings_ms || null, [queryResult]);
 
   useEffect(() => {
     const state = location.state;
     if (state?.question) {
       setPrefill({ question: state.question, datasetId: state.datasetId || null });
-      window.history.replaceState({}, document.title);
+      navigate(location.pathname, { replace: true, state: {} });
     }
-  }, [location.state]);
+  }, [location.state, location.pathname, navigate]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -173,22 +182,65 @@ const Dashboard = () => {
   }, [activeDatasetId]);
 
   const handleQuery = async (queryData) => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setLoading(true);
     setQueryResult(null);
     setError(null);
     lastDatasetId.current = queryData.dataset_id || lastDatasetId.current;
     if (queryData.dataset_id) setActiveDatasetId(queryData.dataset_id);
+    const datasetId = queryData.dataset_id || lastDatasetId.current;
+
+    // Starting a question on a different dataset begins a fresh conversation;
+    // otherwise keep the last turns as context for the AI Data Analyst.
+    if (conversationDatasetRef.current && conversationDatasetRef.current !== datasetId) {
+      conversationDatasetRef.current = datasetId;
+      setConversation([]);
+    }
+    const context = conversationDatasetRef.current === datasetId
+      ? conversation.filter((t) => t.dataset_id === datasetId).slice(-6)
+      : [];
+
+    const payload = {
+      question: queryData.question,
+      dataset_id: datasetId,
+      ...(queryData.dataset_ids && queryData.dataset_ids.length ? { dataset_ids: queryData.dataset_ids } : {}),
+      ...(context.length > 0 ? { context } : {}),
+    };
+
     try {
-      const res = await executeQuery(queryData);
+      const res = await executeQuery(payload, { signal: controller.signal });
       setQueryResult(res.data);
       if (!res.data.answer_status || res.data.answer_status === 'answered') {
         toast.success('Query executed successfully!');
+      }
+      // Record the answered turn so natural follow-ups ("by region", "which one
+      // is worst?") can be resolved against it on the backend.
+      if (res.data.answer_status === 'answered' && res.data.generated_sql) {
+        const columns = res.data.data && res.data.data.length ? Object.keys(res.data.data[0]) : [];
+        conversationDatasetRef.current = datasetId;
+        setConversation((prev) => [
+          ...prev.filter((t) => t.dataset_id !== datasetId).slice(-6),
+          {
+            question: res.data.question,
+            sql: res.data.generated_sql,
+            columns,
+            dataset_id: datasetId,
+          },
+        ]);
       }
       const histRes = await getQueryHistory().catch(() => null);
       if (histRes) {
         setQueryHistory(Array.isArray(histRes.data) ? histRes.data : (histRes.data?.queries || []));
       }
     } catch (err) {
+      if (axios.isCancel(err)) {
+        return; // Request was aborted by newer query
+      }
       const detail = err.response?.data?.detail;
       if (detail && typeof detail === 'object' && detail?.error) {
         setQueryResult({
@@ -228,6 +280,11 @@ const Dashboard = () => {
     }
   };
 
+  const startNewConversation = () => {
+    setConversation([]);
+    conversationDatasetRef.current = null;
+  };
+
   const handleExportCsv = () => {
     if (queryResult?.data?.length) {
       exportCsv(queryResult.data, `${queryResult.question.slice(0, 40).replace(/[^\w\s-]/g, '').trim() || 'query'}-results.csv`);
@@ -239,17 +296,6 @@ const Dashboard = () => {
       downloadJson(queryResult.data, 'query-results.json');
     }
   };
-
-  if (initialLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
-          <p className="text-dark-400 text-sm">Loading dashboard...</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="relative">
@@ -293,7 +339,7 @@ const Dashboard = () => {
           )}
         </AnimatePresence>
 
-        {!error && datasets.length === 0 && !loading && (
+        {!error && datasets.length === 0 && !loading && !initialLoading && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -313,17 +359,44 @@ const Dashboard = () => {
           </motion.div>
         )}
 
-        <KPICards datasets={datasets} queryCount={queryHistory.length} />
+        <KPICards datasets={datasets} queryCount={queryHistory.length} loading={initialLoading} />
 
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
             <QueryInput
               datasets={datasets}
               onSubmit={handleQuery}
-              loading={loading}
+              loading={loading || initialLoading}
               initialQuestion={prefill?.question || ''}
               initialDatasetId={prefill?.datasetId}
             />
+
+            <AnimatePresence>
+              {conversation.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-apple bg-primary-500/6 border border-primary-500/15"
+                >
+                  <div className="flex items-center gap-2 text-sm text-primary-300 min-w-0">
+                    <MessageSquarePlus className="w-4 h-4 flex-shrink-0" />
+                    <span className="truncate">
+                      AI Data Analyst: following up on your last question
+                      <span className="text-dark-500 ml-2 text-xs">
+                        {conversation.length} turn{conversation.length > 1 ? 's' : ''}
+                      </span>
+                    </span>
+                  </div>
+                  <button
+                    onClick={startNewConversation}
+                    className="text-xs px-2.5 py-1 rounded-apple bg-dark-800/60 border border-white/[0.06] text-dark-400 hover:text-dark-200 hover:border-white/[0.12] transition-colors flex-shrink-0"
+                  >
+                    Start new
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <AnimatePresence>
               {loading && (
@@ -331,26 +404,19 @@ const Dashboard = () => {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="glass-card p-8 flex flex-col items-center gap-5"
+                  className="space-y-6"
                 >
-                  <div className="relative">
-                    <div className="w-14 h-14 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
-                    <Sparkles className="w-5 h-5 text-primary-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
-                  </div>
-                  <div className="text-center space-y-2">
-                    <p className="text-dark-200 font-medium">AI is analyzing your data...</p>
-                    <div className="flex flex-wrap items-center justify-center gap-3 text-[11px]">
-                      <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-dark-700/50 text-dark-400">
-                        <Brain className="w-3 h-3" /> Understanding question
-                      </span>
-                      <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-dark-700/50 text-dark-400">
-                        <Database className="w-3 h-3" /> Querying data
-                      </span>
-                      <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-dark-700/50 text-dark-400">
-                        <BarChart3 className="w-3 h-3" /> Building chart
-                      </span>
+                  <div className="glass-card p-5 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-6 h-6 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
+                      <span className="text-sm font-medium text-dark-200">AI is analyzing your data...</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-dark-500">
+                      <span>Generating SQL & Visualizing</span>
                     </div>
                   </div>
+                  <SkeletonLoader.ChartSkeleton />
+                  <SkeletonLoader.SummarySkeleton />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -414,6 +480,14 @@ const Dashboard = () => {
                     animate={{ opacity: 1, y: 0 }}
                     className="flex items-center justify-end gap-2"
                   >
+                    {queryTimings && (
+                      <span className="mr-auto text-[11px] text-dark-500 flex items-center gap-1.5">
+                        <Zap className="w-3 h-3 text-apple-green" />
+                        {queryTimings.cached
+                          ? `Cached answer · ${queryTimings.total_ms ?? 0} ms`
+                          : `Query pipeline · ${queryTimings.total_ms ?? 0} ms`}
+                      </span>
+                    )}
                     <button onClick={handleExportCsv} className="btn-secondary text-xs flex items-center gap-1.5">
                       <Download className="w-3.5 h-3.5" />
                       Export CSV
@@ -460,7 +534,13 @@ const Dashboard = () => {
                 Your Datasets
               </h3>
               <div className="space-y-2">
-                {datasets.length === 0 ? (
+                {initialLoading ? (
+                  <div className="space-y-2 py-1">
+                    {[...Array(3)].map((_, i) => (
+                      <div key={i} className="h-14 bg-dark-800/40 border border-white/[0.04] rounded-apple animate-pulse" />
+                    ))}
+                  </div>
+                ) : datasets.length === 0 ? (
                   <p className="text-dark-500 text-sm py-4 text-center">No datasets yet. Upload one to get started!</p>
                 ) : (
                   datasets.map((ds) => (
@@ -526,7 +606,13 @@ const Dashboard = () => {
                 Recent Queries
               </h3>
               <div className="space-y-2">
-                {queryHistory.length === 0 ? (
+                {initialLoading ? (
+                  <div className="space-y-2 py-1">
+                    {[...Array(3)].map((_, i) => (
+                      <div key={i} className="h-14 bg-dark-800/40 border border-white/[0.04] rounded-apple animate-pulse" />
+                    ))}
+                  </div>
+                ) : queryHistory.length === 0 ? (
                   <p className="text-dark-500 text-sm py-4 text-center">No queries yet. Ask your first question!</p>
                 ) : (
                   queryHistory.slice(0, 5).map((q) => (

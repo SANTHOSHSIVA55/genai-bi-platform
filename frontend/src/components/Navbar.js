@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Upload, History, Sparkles,
-  Menu, X, LogOut, ChevronDown, UserCircle
+  Menu, X, LogOut, ChevronDown, UserCircle, Table2
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -27,6 +27,7 @@ const Navbar = () => {
 
   const navItems = [
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { path: '/explorer', label: 'Data Explorer', icon: Table2 },
     { path: '/upload', label: 'Upload', icon: Upload },
     { path: '/history', label: 'History', icon: History },
   ];

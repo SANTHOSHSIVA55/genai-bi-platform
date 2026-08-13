@@ -112,6 +112,20 @@ class DatasetPreviewResponse(BaseModel):
     sample_rows: list
 
 
+class DatasetRowsResponse(BaseModel):
+    dataset: DatasetResponse
+    columns: list
+    rows: List[dict] = []
+    total: int
+    page: int = 1
+    page_size: int = 50
+    sorted_by: Optional[str] = None
+    sorted_dir: str = "asc"
+    search: str = ""
+    row_count: int = 0
+    unique_ratio: dict = {}
+
+
 class DatasetOverviewColumn(BaseModel):
     name: str
     type: Optional[str] = None
@@ -156,10 +170,18 @@ class DatasetQuestionsResponse(BaseModel):
 
 
 # ─── Query ──────────────────────────────────────────────
+class ConversationTurn(BaseModel):
+    question: str = ""
+    sql: str = ""
+    columns: list = []
+    dataset_id: Optional[str] = None
+
+
 class NLQueryRequest(BaseModel):
     question: str = Field(..., min_length=3, max_length=500)
     dataset_id: str = Field(..., min_length=8, max_length=64, pattern=r"^[0-9a-fA-F-]+$")
     dataset_ids: Optional[List[str]] = None
+    context: Optional[List[ConversationTurn]] = None
 
     @field_validator("question")
     @classmethod
@@ -207,6 +229,7 @@ class QueryResultResponse(BaseModel):
     answer_status: str = "answered"
     sufficiency: dict = {}
     datasets_used: List[str] = []
+    pipeline_timings_ms: dict = {}
 
 
 class QueryLogResponse(BaseModel):

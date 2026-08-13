@@ -1,6 +1,8 @@
 import json
+import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -29,6 +31,7 @@ from ai import (
 )
 from ai.columns import _parse_columns_info
 from ai.clarity import check_question_feasibility
+from ai.context import resolve_followup_question
 from ai.joins import build_multi_table_sql
 from ai.profile import build_profile, detect_currency
 from ai.relationships import detect_relationships
@@ -64,12 +67,14 @@ from data_cleaner import assess_data_quality, clean_dataframe, get_column_info, 
 from database import engine, get_db, get_dynamic_table_names, init_db
 from logging_config import request_id_var, setup_logging
 from models import Dataset, QueryLog, User
+from query_cache import build_cache_key, clear_query_cache, get_cached, put_cached
 from schemas import (
     DatasetListResponse,
     DatasetPreviewResponse,
     DatasetProfileResponse,
     DatasetQuestionsResponse,
     DatasetResponse,
+    DatasetRowsResponse,
     ForgotPasswordRequest,
     MessageResponse,
     NLQueryRequest,
@@ -457,6 +462,7 @@ async def upload_dataset(
     db.add(dataset)
     db.commit()
     db.refresh(dataset)
+    clear_query_cache()
 
     write_audit(db, "dataset.upload", user_id=current_user.id, entity_type="dataset",
                 entity_id=dataset.id, details=f"table={table_name} rows={len(df)}",
@@ -537,6 +543,91 @@ def preview_dataset(
     )
 
 
+@app.get("/api/data/datasets/{dataset_id}/rows", response_model=DatasetRowsResponse, tags=["Data"])
+def dataset_rows(
+    dataset_id: str,
+    page: int = 1,
+    page_size: int = 50,
+    sort_by: str = "",
+    sort_dir: str = "asc",
+    search: str = "",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Server-side paginated, sortable, searchable raw-data view for the Data
+    Explorer. Read-only analytical query; column names are validated against the
+    table schema and the search value is parameterized, so no dynamic SQL can be
+    injected. Only ever fetches one page of rows from the DB."""
+    dataset = _get_owned_dataset(dataset_id, current_user, db)
+    page = max(1, page)
+    page_size = min(100, max(1, page_size))
+    sort_dir = "asc" if sort_dir != "desc" else "desc"
+
+    columns = json.loads(dataset.columns_info or "[]")
+    col_names = [c.get("name") for c in columns if c.get("name")]
+    if not col_names:
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(f'SELECT * FROM "{dataset.table_name}" LIMIT 1'))
+                col_names = list(result.keys())
+        except Exception:
+            raise HTTPException(status_code=500, detail="Failed to read dataset columns")
+
+    safe_sort = sort_by if sort_by in col_names else None
+    sql = f'SELECT * FROM "{dataset.table_name}"'
+    params = {}
+    if search:
+        conditions = [f'CAST("{c}" AS TEXT) LIKE :search' for c in col_names]
+        sql += " WHERE " + " OR ".join(conditions)
+        params["search"] = f"%{search}%"
+    if safe_sort:
+        sql += f' ORDER BY "{safe_sort}" {"ASC" if sort_dir == "asc" else "DESC"} NULLS LAST'
+    else:
+        sql += ' ORDER BY rowid'
+    sql += f" LIMIT {page_size} OFFSET {(page - 1) * page_size}"
+
+    validated_sql = validate_sql(sql, allowed_tables=[dataset.table_name])
+    count_sql = f'SELECT COUNT(*) FROM "{dataset.table_name}"'
+    if search:
+        conditions = [f'CAST("{c}" AS TEXT) LIKE :search' for c in col_names]
+        count_sql += " WHERE " + " OR ".join(conditions)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(validated_sql), params)
+            columns_result = list(result.keys())
+            rows = [dict(zip(columns_result, r)) for r in result.fetchall()]
+            total = conn.execute(text(count_sql), params).scalar() or 0
+    except Exception as e:
+        logger.error("Rows query failed for dataset %s: %s", dataset.id, e)
+        raise HTTPException(status_code=500, detail="Failed to read dataset rows")
+
+    serialized = []
+    for row in rows:
+        item = {}
+        for k, v in row.items():
+            item[k] = _json_safe(v)
+        serialized.append(item)
+
+    unique_ratio = {
+        c.get("name"): (c.get("unique") or 0) / max(1, dataset.row_count or 1)
+        for c in columns if c.get("name") and c.get("unique") is not None
+    }
+
+    return DatasetRowsResponse(
+        dataset=DatasetResponse.model_validate(dataset),
+        columns=columns_result,
+        rows=serialized,
+        total=total,
+        page=page,
+        page_size=page_size,
+        sorted_by=safe_sort,
+        sorted_dir=sort_dir,
+        search=search,
+        row_count=dataset.row_count or 0,
+        unique_ratio=unique_ratio,
+    )
+
+
 @app.get("/api/data/datasets/{dataset_id}/profile", response_model=DatasetProfileResponse, tags=["Data"])
 def dataset_profile(
     dataset_id: str,
@@ -587,6 +678,7 @@ def delete_dataset(
     _drop_table(table_name)
     db.delete(dataset)
     db.commit()
+    clear_query_cache(dataset_id)
 
     write_audit(db, "dataset.delete", user_id=current_user.id, entity_type="dataset",
                 entity_id=dataset_id, details=f"table={table_name}", ip_address=_client_ip(request))
@@ -614,6 +706,55 @@ _TREND_WORDS = ("trend", "over time", "monthly", "weekly", "daily", "yearly", "t
 def _is_trend_question(question: str) -> bool:
     q = question.lower()
     return any(w in q for w in _TREND_WORDS)
+
+
+def _detect_id_aggregation_guidance(question: str, cols_meta: list) -> Optional[str]:
+    """Semantic gate: flag attempts to SUM/AVERAGE an identifier column.
+
+    ``SUM(supplierid)`` is technically valid SQL but semantically meaningless
+    because ``supplierid`` is an identifier, not a measure. When the user asks
+    for a total/average of an ID column we explain why and suggest meaningful
+    alternatives instead of generating the misleading SQL. Legitimate ID
+    questions (highest/lowest ID, how many, grouped distributions) are not
+    rejected: only the meaningless additive aggregations are.
+    """
+    q = " " + question.lower() + " "
+    id_cols = [c.get("name") for c in cols_meta if c.get("type") == "id"]
+    if not id_cols:
+        return None
+
+    def _mentions(token: str) -> bool:
+        # Token-aware match that also treats "_" as a separator, so both
+        # "supplier_id" and "supplier id" match, regardless of trailing
+        # punctuation ("what is the total supplier_id?").
+        patterns = (token, token.replace("_", " "))
+        return any(
+            re.search(r"(?<![\w])" + re.escape(p) + r"(?![\w])", q)
+            for p in patterns
+        )
+
+    mentioned = [c for c in id_cols if _mentions(c.lower())]
+    if not mentioned:
+        return None
+    # Legitimate identifier questions that must still be allowed.
+    if any(kw in q for kw in (
+        "highest", "lowest", "maximum", "minimum", " max ", " min ",
+        "how many", "number of", "count", "distinct", "distribution",
+        " by ", " per ", " top ", " bottom ", "list", "show", "which",
+        "range", "between",
+    )):
+        return None
+    if not any(kw in q for kw in ("total", "sum", "average", "avg", "mean",
+                                  "add", "add up", "aggregate", "summation")):
+        return None
+    col = mentioned[0]
+    return (
+        f"'{col}' is an identifier column, not a business measure. "
+        f"Adding or averaging an ID produces a number without business meaning "
+        f"(e.g. SUM({col}) just adds up arbitrary identifiers). "
+        f"Did you mean: how many records there are, the highest {col}, "
+        f"or a breakdown by a category column?"
+    )
 
 
 def _date_capable(cols_meta: list) -> bool:
@@ -835,6 +976,49 @@ def execute_nl_query(
     ]
 
     question = body.question.strip()
+    pipeline_start = time.perf_counter()
+    timings: dict = {}
+
+    # ── CONVERSATION CONTEXT (AI Data Analyst) ─────────────────────────────
+    # Follow-ups ("show me by region", "which one is worst?") are resolved
+    # against the last turn on the same dataset before any other pipeline stage.
+    if body.context:
+        previous = next(
+            (t for t in reversed(body.context) if t.dataset_id == body.dataset_id),
+            None,
+        )
+        if previous:
+            resolved = resolve_followup_question(
+                question,
+                {"question": previous.question, "sql": previous.sql, "columns": previous.columns},
+                cols_meta,
+            )
+            if resolved != question:
+                logger.info(
+                    "Context resolution: %r -> %r (dataset %s)",
+                    question, resolved, primary.id,
+                )
+                question = resolved
+    timings["context_ms"] = round((time.perf_counter() - pipeline_start) * 1000, 1)
+
+    # ── RESULT CACHE ───────────────────────────────────────────────────────
+    # Identical analysis on unchanged data returns instantly. Cached entries
+    # are invalidated on dataset upload/delete and keyed by schema version, so
+    # stale results can never be served.
+    cache_key = None
+    if not multi:
+        cache_key = build_cache_key(
+            current_user.id, primary.id, question,
+            primary_columns_info, primary.row_count,
+        )
+        cached = get_cached(cache_key)
+        if cached is not None:
+            timings["cached"] = True
+            timings["total_ms"] = round((time.perf_counter() - pipeline_start) * 1000, 1)
+            cached.pipeline_timings_ms = timings
+            return cached
+    timings["schema_ms"] = round((time.perf_counter() - pipeline_start) * 1000, 1)
+    timings["cached"] = False
 
     # Guidance: vague prompt -> suggest schema-aware questions instead of guessing.
     if question.lower().rstrip("!.") in VAGUE_QUESTIONS:
@@ -863,6 +1047,15 @@ def execute_nl_query(
             question,
             feasibility["guidance"],
             cols_meta, n_stages=2, db=db, current_user=current_user, dataset=primary,
+        )
+
+    # ── SEMANTIC GATE (identifier aggregation) ─────────────────────────────
+    # "What is the total supplierid?" must never run SUM(supplierid).
+    id_guidance = _detect_id_aggregation_guidance(question, cols_meta)
+    if id_guidance:
+        return _guidance_response(
+            question, id_guidance, cols_meta, n_stages=3,
+            db=db, current_user=current_user, dataset=primary,
         )
 
     # ── SUFFICIENCY GATE (primary prevention of wrong answers) ──────────────
@@ -1048,7 +1241,9 @@ def execute_nl_query(
     )
     db.commit()
 
-    return QueryResultResponse(
+    timings["total_ms"] = round((time.perf_counter() - pipeline_start) * 1000, 1)
+
+    response = QueryResultResponse(
         question=question,
         generated_sql=safe_sql,
         data=serialized_rows,
@@ -1064,7 +1259,11 @@ def execute_nl_query(
         answer_status=answer_status,
         sufficiency=suff,
         datasets_used=[d.table_name for d in datasets],
+        pipeline_timings_ms=timings,
     )
+    if cache_key is not None:
+        put_cached(cache_key, response, dataset_ids=[d.id for d in datasets])
+    return response
 
 
 @app.get("/api/query/history", response_model=QueryLogListResponse, tags=["Query"])
@@ -1088,6 +1287,38 @@ def query_history(
         queries=[QueryLogResponse.model_validate(l) for l in logs],
         total=total,
     )
+
+
+@app.delete("/api/query/history/{query_id}", tags=["Query"])
+def delete_history_entry(
+    query_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    log = (
+        db.query(QueryLog)
+        .filter(QueryLog.id == query_id, QueryLog.user_id == current_user.id)
+        .first()
+    )
+    if not log:
+        raise HTTPException(status_code=404, detail="History entry not found")
+    db.delete(log)
+    db.commit()
+    return {"deleted": query_id}
+
+
+@app.delete("/api/query/history", tags=["Query"])
+def clear_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    deleted = (
+        db.query(QueryLog)
+        .filter(QueryLog.user_id == current_user.id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"deleted": deleted}
 
 
 # ──────────────────────────────────────────────

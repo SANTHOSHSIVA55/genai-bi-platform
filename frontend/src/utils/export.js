@@ -3,7 +3,10 @@ export const exportCsv = (data, filename = 'query-results.csv') => {
   const columns = Object.keys(data[0]);
   const escape = (value) => {
     if (value == null) return '';
-    const str = String(value);
+    let str = String(value);
+    if (/^[=+\-@]/.test(str)) {
+      str = `'${str}`;
+    }
     if (/[",\n\r]/.test(str)) {
       return `"${str.replace(/"/g, '""')}"`;
     }

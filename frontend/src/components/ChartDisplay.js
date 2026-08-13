@@ -1,15 +1,26 @@
-import React, { useMemo } from 'react';
-import { motion } from 'framer-motion';
+import React, { useMemo, useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  ScatterChart, Scatter, ZAxis
 } from 'recharts';
-import { BarChart3, TrendingUp, PieChart as PieIcon, AreaChart as AreaChartIcon, Table2, Target, ArrowUpDown, Database, Tag, Hash } from 'lucide-react';
+import {
+  BarChart3, TrendingUp, PieChart as PieIcon, AreaChart as AreaChartIcon,
+  Table2, Target, ArrowUpDown, Database, Tag, Hash, Maximize2, Minimize2,
+  Download, Image as ImageIcon
+} from 'lucide-react';
 
 const COLORS = [
   '#ff3b30', '#ff6b6b', '#ff9500', '#ffcc00', '#34c759',
   '#5ac8fa', '#007aff', '#af52de', '#ff2d55', '#8e8e93',
 ];
+
+// Rendering hundreds of SVG marks per chart point janks low-end machines.
+// Categorical charts cap at 60 categories; scatter tolerates more. The raw-data
+// table below still shows the full (capped) result set independently.
+const CHART_DATA_CAP = 60;
+const SCATTER_DATA_CAP = 200;
 
 const isAnalysisResult = (data, chartType) => {
   if (!data || data.length !== 1 || chartType !== 'kpi') return false;
@@ -87,32 +98,68 @@ const smartAxisKey = (data, columns, preferred) => {
   return columns[0] || '';
 };
 
+/* ───── Custom Tooltip Moved Outside Render to Fix Memory Leaks ───── */
+const CustomTooltip = ({ active, payload, label, renderValue }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="bg-dark-800/95 border border-white/[0.08] rounded-apple-lg p-3 shadow-apple max-w-xs backdrop-blur-2xl">
+      <p className="text-dark-300 text-sm font-medium mb-1.5 truncate">{label}</p>
+      {payload.map((entry, i) => (
+        <p key={i} className="text-sm flex justify-between gap-4" style={{ color: entry.color }}>
+          <span className="truncate">{entry.name}:</span>
+          <span className="font-semibold whitespace-nowrap">{renderValue(entry.dataKey, entry.value)}</span>
+        </p>
+      ))}
+    </div>
+  );
+};
+
 const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }) => {
+  const [selectedChartType, setSelectedChartType] = useState('auto');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Sync / Reset to auto on query changes
+  useEffect(() => {
+    setSelectedChartType('auto');
+  }, [chartConfig]);
+
   const safeData = useMemo(() => {
     if (!data || !Array.isArray(data) || data.length === 0) return [];
     return data.filter(row => row && typeof row === 'object');
   }, [data]);
 
-  const money = makeMoneyFormatter(currency);
+  // Chart data is capped independently from the raw table so the SVG stays
+  // cheap to render and animate on large result sets.
+  const chartData = useMemo(() => {
+    const cap = chartType === 'scatter' ? SCATTER_DATA_CAP : CHART_DATA_CAP;
+    return safeData.length > cap ? safeData.slice(0, cap) : safeData;
+  }, [safeData, chartType]);
+  const chartCapped = chartData.length < safeData.length;
+
+  const money = useMemo(() => makeMoneyFormatter(currency), [currency]);
 
   // Per-column semantic formatting: COUNT results are always plain integers,
   // only genuinely monetary columns get the currency symbol; PERCENTAGE columns
   // get a % suffix; date/text columns pass through.
-  const renderValue = (col, val) => {
-    if (val == null || val === '') return '\u2014';
-    if (typeof val === 'number') {
-      const st = (semanticTypes || {})[col];
-      if (st === 'count') return formatNumber(val);
-      if (st === 'percentage') return formatNumber(val) + '%';
-      if (st === 'currency') return money(val);
-      return currency ? money(val) : formatNumber(val);
-    }
-    return String(val);
-  };
+  const renderValue = useMemo(() => {
+    return (col, val) => {
+      if (val == null || val === '') return '\u2014';
+      if (typeof val === 'number') {
+        const st = (semanticTypes || {})[col];
+        if (st === 'count') return formatNumber(val);
+        if (st === 'percentage') return formatNumber(val) + '%';
+        if (st === 'currency') return money(val);
+        return currency ? money(val) : formatNumber(val);
+      }
+      return String(val);
+    };
+  }, [money, currency, semanticTypes]);
 
   if (safeData.length === 0 || !chartConfig) return null;
 
-  const chartType = chartConfig.chart_type || 'table';
+  const autoChartType = chartConfig.chart_type || 'table';
+  const chartType = selectedChartType === 'auto' ? autoChartType : selectedChartType;
+
   const columns = safeData.length > 0 ? Object.keys(safeData[0]) : [];
   const xKey = smartAxisKey(safeData, columns, chartConfig.x_axis);
   const yKey = smartAxisKey(safeData, columns, chartConfig.y_axis);
@@ -122,6 +169,31 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
   const hasMultiY = numericCols.length > 1 && chartType !== 'pie';
 
   const isRanking = intentType === 'ranking' || columns.length === 2;
+
+  // Reusable styles
+  const tickStyle = { fill: '#8e8e93', fontSize: 11, fontFamily: 'Inter, sans-serif' };
+  const gridStyle = { strokeDasharray: '3 3', stroke: '#2c2c2e' };
+
+  const axisTick = (v) => {
+    const col = numericCols[0] || yKey;
+    const st = (semanticTypes || {})[col];
+    if (typeof v === 'number') {
+      if (st === 'count') return formatNumber(v);
+      if (st === 'percentage') return formatNumber(v) + '%';
+      if (st === 'currency') return money(v);
+      return currency ? currency + formatNumber(v) : formatNumber(v);
+    }
+    if (st === 'date' && typeof v === 'string') {
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) {
+        const month = d.toLocaleString('en', { month: 'short' });
+        return d.getFullYear() === new Date().getFullYear()
+          ? month
+          : `${month} '${String(d.getFullYear()).slice(2)}`;
+      }
+    }
+    return String(v);
+  };
 
   // Multi-KPI analysis result grid
   if (isAnalysisResult(safeData, chartType)) {
@@ -177,62 +249,23 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
       case 'line': return <TrendingUp className="w-5 h-5 text-apple-orange" />;
       case 'area': return <AreaChartIcon className="w-5 h-5 text-apple-green" />;
       case 'pie': return <PieIcon className="w-5 h-5 text-apple-purple" />;
+      case 'donut': return <PieIcon className="w-5 h-5 text-apple-blue" />;
       default: return <Table2 className="w-5 h-5 text-dark-400" />;
     }
   };
 
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div className="bg-dark-800/95 border border-white/[0.08] rounded-apple-lg p-3 shadow-apple max-w-xs backdrop-blur-2xl">
-        <p className="text-dark-300 text-sm font-medium mb-1.5 truncate">{label}</p>
-        {payload.map((entry, i) => (
-          <p key={i} className="text-sm flex justify-between gap-4" style={{ color: entry.color }}>
-            <span className="truncate">{entry.name}:</span>
-            <span className="font-semibold whitespace-nowrap">{renderValue(entry.dataKey, entry.value)}</span>
-          </p>
-        ))}
-      </div>
-    );
-  };
-
-  const tickStyle = { fill: '#8e8e93', fontSize: 11, fontFamily: 'Inter, sans-serif' };
-  const gridStyle = { strokeDasharray: '3 3', stroke: '#2c2c2e' };
-  // Axis ticks follow the result's semantic type: counts plain, currency with
-  // symbol, percentages with %, dates shortened to Jan/Feb/...
-  const axisTick = (v) => {
-    const col = numericCols[0] || yKey;
-    const st = (semanticTypes || {})[col];
-    if (typeof v === 'number') {
-      if (st === 'count') return formatNumber(v);
-      if (st === 'percentage') return formatNumber(v) + '%';
-      if (st === 'currency') return money(v);
-      return currency ? currency + formatNumber(v) : formatNumber(v);
-    }
-    if (st === 'date' && typeof v === 'string') {
-      const d = new Date(v);
-      if (!isNaN(d.getTime())) {
-        const month = d.toLocaleString('en', { month: 'short' });
-        return d.getFullYear() === new Date().getFullYear()
-          ? month
-          : `${month} '${String(d.getFullYear()).slice(2)}`;
-      }
-    }
-    return String(v);
-  };
-
   const renderBarChart = () => {
-    const isHorizontal = isRanking && safeData.length <= 20;
+    const isHorizontal = isRanking && chartData.length <= 20;
 
     if (isHorizontal) {
-      const sorted = [...safeData].sort((a, b) => (b[yKey] || 0) - (a[yKey] || 0));
+      const sorted = [...chartData].sort((a, b) => (b[yKey] || 0) - (a[yKey] || 0));
       return (
         <ResponsiveContainer width="100%" height={Math.max(200, sorted.length * 36)}>
           <BarChart data={sorted} layout="vertical" margin={{ top: 10, right: 30, left: 100, bottom: 10 }}>
             <CartesianGrid {...gridStyle} horizontal={false} />
             <XAxis type="number" tick={tickStyle} tickFormatter={axisTick} />
             <YAxis dataKey={xKey} type="category" tick={tickStyle} width={90} tickLine={false} axisLine={false} />
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
             <Bar dataKey={yKey} fill="url(#barGrad)" radius={[0, 4, 4, 0]} maxBarSize={24} />
             <defs>
               <linearGradient id="barGrad" x1="0" y1="0" x2="1" y2="0">
@@ -247,11 +280,11 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
 
     return (
       <ResponsiveContainer width="100%" height={400}>
-        <BarChart data={safeData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+        <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
           <CartesianGrid {...gridStyle} />
-          <XAxis dataKey={xKey} tick={tickStyle} angle={safeData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
+          <XAxis dataKey={xKey} tick={tickStyle} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
           <YAxis tick={tickStyle} tickFormatter={axisTick} />
-          <Tooltip content={<CustomTooltip />} />
+          <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
           <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
           {hasMultiY ? (
             numericCols.map((col, i) => (
@@ -273,11 +306,11 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
 
   const renderLineChart = () => (
     <ResponsiveContainer width="100%" height={400}>
-      <LineChart data={safeData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+      <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
         <CartesianGrid {...gridStyle} />
-        <XAxis dataKey={xKey} tick={tickStyle} angle={safeData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
+        <XAxis dataKey={xKey} tick={tickStyle} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
         <YAxis tick={tickStyle} tickFormatter={axisTick} />
-        <Tooltip content={<CustomTooltip />} />
+        <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
         <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
         {hasMultiY ? (
           numericCols.map((col, i) => (
@@ -296,11 +329,11 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
 
   const renderAreaChart = () => (
     <ResponsiveContainer width="100%" height={400}>
-      <AreaChart data={safeData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+      <AreaChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
         <CartesianGrid {...gridStyle} />
-        <XAxis dataKey={xKey} tick={tickStyle} angle={safeData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
+        <XAxis dataKey={xKey} tick={tickStyle} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
         <YAxis tick={tickStyle} tickFormatter={axisTick} />
-        <Tooltip content={<CustomTooltip />} />
+        <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
         <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
         {hasMultiY ? (
           numericCols.map((col, i) => (
@@ -320,24 +353,37 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
     </ResponsiveContainer>
   );
 
-  const renderPieChart = () => {
-    const pieData = safeData.slice(0, 10);
+  const renderPieChart = (isDonut = false) => {
+    const pieData = chartData.slice(0, 10);
     return (
       <ResponsiveContainer width="100%" height={400}>
         <PieChart>
-          <Pie data={pieData} dataKey={yKey} nameKey={xKey} cx="50%" cy="50%" outerRadius={150} innerRadius={80}
+          <Pie data={pieData} dataKey={yKey} nameKey={xKey} cx="50%" cy="50%" outerRadius={150} innerRadius={isDonut ? 80 : 0}
             paddingAngle={3} label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
             labelLine={{ stroke: '#48484a' }}>
             {pieData.map((_, i) => (
               <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="#1c1c1e" strokeWidth={2} />
             ))}
           </Pie>
-          <Tooltip content={<CustomTooltip />} />
+          <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
           <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
         </PieChart>
       </ResponsiveContainer>
     );
   };
+
+  const renderScatterChart = () => (
+    <ResponsiveContainer width="100%" height={400}>
+      <ScatterChart margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+        <CartesianGrid {...gridStyle} />
+        <XAxis type="category" dataKey={xKey} name={xKey} tick={tickStyle} />
+        <YAxis type="number" dataKey={yKey} name={yKey} tick={tickStyle} tickFormatter={axisTick} />
+        <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
+        <Legend wrapperStyle={{ color: '#aeaeb2', paddingTop: 12 }} />
+        <Scatter name={`${yKey} by ${xKey}`} data={chartData} fill="#ff3b30" />
+      </ScatterChart>
+    </ResponsiveContainer>
+  );
 
   const renderTable = () => {
     if (!safeData.length) return null;
@@ -379,33 +425,88 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
       case 'bar': return renderBarChart();
       case 'line': return renderLineChart();
       case 'area': return renderAreaChart();
-      case 'pie': return renderPieChart();
+      case 'pie': return renderPieChart(false);
+      case 'donut': return renderPieChart(true);
+      case 'scatter': return renderScatterChart();
       default: return renderTable();
     }
   };
 
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.15 }}
-      className="glass-card p-6"
-    >
-      <div className="flex items-center justify-between mb-6">
-        <h3 className="text-lg font-semibold text-dark-100 flex items-center gap-2">
-          {getChartIcon()}
-          {title}
-        </h3>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-dark-500">{safeData.length} rows</span>
-          <span className="text-xs px-3 py-1 rounded-full bg-dark-700/50 text-dark-400 uppercase tracking-wider">
-            {chartType}
-          </span>
+  const downloadSvg = () => {
+    const svgElement = document.querySelector('.recharts-responsive-container svg');
+    if (!svgElement) return;
+    const svgString = new XMLSerializer().serializeToString(svgElement);
+    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const svgUrl = URL.createObjectURL(svgBlob);
+    const downloadLink = document.createElement('a');
+    downloadLink.href = svgUrl;
+    downloadLink.download = `${title.toLowerCase().replace(/\s+/g, '-')}.svg`;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    URL.revokeObjectURL(svgUrl);
+  };
+
+  const chartTypesList = ['auto', 'bar', 'line', 'area', 'pie', 'donut', 'scatter', 'table'];
+
+  const containerContent = (
+    <div className={`flex flex-col h-full ${isFullscreen ? 'bg-dark-900 p-8 w-full h-full' : ''}`}>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+        <div>
+          <h3 className="text-lg font-semibold text-dark-100 flex items-center gap-2">
+            {getChartIcon()}
+            {title}
+          </h3>
+          {chartConfig.description && (
+            <p className="text-xs text-dark-400 mt-1">{chartConfig.description}</p>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Manual controls buttons */}
+          <div className="flex items-center rounded-lg bg-dark-800 p-0.5 border border-white/[0.04] overflow-x-auto max-w-full">
+            {chartTypesList.map(type => (
+              <button
+                key={type}
+                onClick={() => setSelectedChartType(type)}
+                className={`px-2.5 py-1 text-xs font-medium rounded-md capitalize transition-colors whitespace-nowrap ${
+                  chartType === type || (type === 'auto' && selectedChartType === 'auto')
+                    ? 'bg-primary-500 text-white shadow-sm'
+                    : 'text-dark-400 hover:text-dark-200'
+                }`}
+              >
+                {type}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-1">
+            {chartType !== 'table' && (
+              <button
+                onClick={downloadSvg}
+                className="p-2 rounded-lg bg-dark-800 hover:bg-dark-700 text-dark-300 border border-white/[0.04]"
+                title="Download Chart (SVG)"
+              >
+                <ImageIcon className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="p-2 rounded-lg bg-dark-800 hover:bg-dark-700 text-dark-300 border border-white/[0.04]"
+              title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            >
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="min-h-[400px]">
+      <div className="flex-1 min-h-[400px]">
         {renderChart()}
+        {chartCapped && chartType !== 'table' && (
+          <p className="text-dark-500 text-xs text-center mt-2">
+            Charting the first {chartData.length} of {safeData.length} data points
+          </p>
+        )}
       </div>
 
       {chartType !== 'table' && safeData.length > 0 && (
@@ -414,7 +515,28 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
           {renderTable()}
         </div>
       )}
-    </motion.div>
+    </div>
+  );
+
+  return (
+    <>
+      {isFullscreen ? (
+        <div className="fixed inset-0 z-50 bg-dark-950 flex items-center justify-center p-4">
+          <div className="relative w-full h-full max-w-7xl">
+            {containerContent}
+          </div>
+        </div>
+      ) : (
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="glass-card p-6"
+        >
+          {containerContent}
+        </motion.div>
+      )}
+    </>
   );
 };
 

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Database, Rows3, Columns3, TrendingUp } from 'lucide-react';
 
+import SkeletonLoader from './SkeletonLoader';
+
 const useCountUp = (end, duration = 1000) => {
   const [count, setCount] = useState(0);
   const ref = useRef(null);
@@ -32,7 +34,11 @@ const AnimatedNumber = ({ value }) => {
   return <>{animated.toLocaleString()}</>;
 };
 
-const KPICards = ({ datasets, queryCount }) => {
+const KPICards = ({ datasets, queryCount, loading }) => {
+  if (loading) {
+    return <SkeletonLoader.KPISkeleton />;
+  }
+
   const totalRows = datasets.reduce((sum, d) => sum + (d.row_count || 0), 0);
   const totalCols = datasets.reduce((sum, d) => sum + (d.column_count || 0), 0);
 

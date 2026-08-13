@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   History, Search, Clock, MessageSquare, Database,
   ChevronDown, ChevronUp, Loader2, Code2, ArrowRight,
-  Calendar, Filter, AlertCircle
+  Calendar, Filter, AlertCircle, Trash2, Eraser, Copy
 } from 'lucide-react';
-import { getQueryHistory } from '../api/api';
+import { getQueryHistory, deleteHistoryEntry, clearQueryHistory } from '../api/api';
+import toast from 'react-hot-toast';
 
 const HistoryPage = () => {
   const navigate = useNavigate();
@@ -37,16 +38,18 @@ const HistoryPage = () => {
     fetchHistory();
   }, [fetchHistory]);
 
-  const filtered = queries
-    .filter((q) =>
-      q.question?.toLowerCase().includes(search.toLowerCase()) ||
-      q.dataset_name?.toLowerCase().includes(search.toLowerCase())
-    )
-    .sort((a, b) => {
-      const da = new Date(a.created_at);
-      const db = new Date(b.created_at);
-      return sortOrder === 'desc' ? db - da : da - db;
-    });
+  const filtered = useMemo(() => {
+    return queries
+      .filter((q) =>
+        q.question?.toLowerCase().includes(search.toLowerCase()) ||
+        q.dataset_name?.toLowerCase().includes(search.toLowerCase())
+      )
+      .sort((a, b) => {
+        const da = new Date(a.created_at);
+        const db = new Date(b.created_at);
+        return sortOrder === 'desc' ? db - da : da - db;
+      });
+  }, [queries, search, sortOrder]);
 
   const formatTime = (iso) => {
     const date = new Date(iso);
@@ -75,6 +78,34 @@ const HistoryPage = () => {
     });
   };
 
+  const handleCopySql = (sql) => {
+    navigator.clipboard?.writeText(sql).then(
+      () => toast.success('SQL copied to clipboard'),
+      () => toast.error('Could not copy SQL')
+    );
+  };
+
+  const handleDelete = async (q) => {
+    try {
+      await deleteHistoryEntry(q.id);
+      setQueries((prev) => prev.filter((x) => x.id !== q.id));
+      toast.success('History entry deleted');
+    } catch (err) {
+      toast.error('Could not delete history entry');
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!window.confirm('Delete all query history? This cannot be undone.')) return;
+    try {
+      await clearQueryHistory();
+      setQueries([]);
+      toast.success('Query history cleared');
+    } catch (err) {
+      toast.error('Could not clear query history');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <motion.div
@@ -92,6 +123,16 @@ const HistoryPage = () => {
         <div className="flex items-center gap-2 text-sm text-dark-400">
           <Calendar className="w-4 h-4" />
           {filtered.length} queries total
+          {filtered.length > 0 && (
+            <button
+              onClick={handleClearAll}
+              title="Clear all history"
+              className="ml-2 px-2.5 py-1 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors text-xs flex items-center gap-1.5"
+            >
+              <Eraser className="w-3 h-3" />
+              Clear all
+            </button>
+          )}
         </div>
       </motion.div>
 
@@ -221,7 +262,7 @@ const HistoryPage = () => {
                             </pre>
                           </div>
                         )}
-                        <div className="flex gap-3 mt-3">
+                        <div className="flex gap-3 mt-3 flex-wrap">
                           <button
                             onClick={() => handleRerun(q)}
                             disabled={!q.dataset_id}
@@ -229,6 +270,22 @@ const HistoryPage = () => {
                           >
                             Re-run Query
                             <ArrowRight className="w-3.5 h-3.5" />
+                          </button>
+                          {q.generated_sql && (
+                            <button
+                              onClick={() => handleCopySql(q.generated_sql)}
+                              className="btn-secondary text-xs flex items-center gap-2"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              Copy SQL
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDelete(q)}
+                            className="text-xs flex items-center gap-2 px-3 py-2 rounded-apple bg-red-500/8 border border-red-500/15 text-red-400 hover:bg-red-500/15 transition-colors ml-auto"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Delete
                           </button>
                         </div>
                       </div>

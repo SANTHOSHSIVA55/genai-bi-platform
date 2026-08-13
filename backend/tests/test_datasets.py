@@ -87,6 +87,55 @@ class TestDelete:
         assert res.status_code == 403
 
 
+class TestRows:
+    """Server-side pagination/sort/search for the Data Explorer."""
+
+    def test_rows_pagination(self, client, user, dataset):
+        res = client.get(f"/api/data/datasets/{dataset['id']}/rows?page=1&page_size=2", headers=user.headers)
+        assert res.status_code == 200
+        body = res.json()
+        assert body["total"] == 5
+        assert len(body["rows"]) == 2
+        assert body["page"] == 1
+        assert "category" in body["columns"]
+
+    def test_rows_sort(self, client, user, dataset):
+        res = client.get(
+            f"/api/data/datasets/{dataset['id']}/rows?sort_by=revenue&sort_dir=desc&page_size=5",
+            headers=user.headers,
+        )
+        assert res.status_code == 200
+        body = res.json()
+        revenues = [r["revenue"] for r in body["rows"]]
+        assert revenues == sorted(revenues, reverse=True)
+        assert body["sorted_by"] == "revenue"
+
+    def test_rows_search(self, client, user, dataset):
+        res = client.get(f"/api/data/datasets/{dataset['id']}/rows?search=Electronics", headers=user.headers)
+        assert res.status_code == 200
+        body = res.json()
+        assert body["total"] == 2
+        assert all(r["category"] == "Electronics" for r in body["rows"])
+        assert body["search"] == "Electronics"
+
+    def test_rows_rejects_bad_sort_column(self, client, user, dataset):
+        res = client.get(
+            f"/api/data/datasets/{dataset['id']}/rows?sort_by=x;DROP TABLE users",
+            headers=user.headers,
+        )
+        assert res.status_code == 200
+        # Unknown sort columns are ignored, not executed.
+        assert res.json()["sorted_by"] is None
+
+    def test_rows_requires_owner(self, client, user, second_user, dataset):
+        res = client.get(f"/api/data/datasets/{dataset['id']}/rows", headers=second_user.headers)
+        assert res.status_code == 403
+
+    def test_rows_requires_auth(self, client, dataset):
+        res = client.get(f"/api/data/datasets/{dataset['id']}/rows")
+        assert res.status_code == 401
+
+
 class TestSecurity:
     def test_sql_injection_dataset_id(self, client, user):
         res = client.get("/api/data/datasets/1; DROP TABLE users;", headers=user.headers)

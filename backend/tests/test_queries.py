@@ -128,6 +128,46 @@ class TestHistory:
         assert res.json()["total"] == 0
 
 
+class TestHistoryDelete:
+    def test_delete_single_entry(self, client, user, dataset):
+        run_query(client, user, "How many rows?", dataset["id"])
+        run_query(client, user, "Analyze this dataset", dataset["id"])
+        hist = client.get("/api/query/history", headers=user.headers).json()
+        assert hist["total"] == 2
+        target = hist["queries"][0]["id"]
+
+        res = client.delete(f"/api/query/history/{target}", headers=user.headers)
+        assert res.status_code == 200
+
+        hist2 = client.get("/api/query/history", headers=user.headers).json()
+        assert hist2["total"] == 1
+        assert target not in [q["id"] for q in hist2["queries"]]
+
+    def test_delete_requires_owner(self, client, user, second_user, dataset):
+        run_query(client, user, "How many rows?", dataset["id"])
+        hist = client.get("/api/query/history", headers=user.headers).json()
+        target = hist["queries"][0]["id"]
+
+        res = client.delete(f"/api/query/history/{target}", headers=second_user.headers)
+        assert res.status_code == 404
+        assert client.get("/api/query/history", headers=user.headers).json()["total"] == 1
+
+    def test_delete_unknown_entry(self, client, user):
+        res = client.delete("/api/query/history/00000000-0000-0000-0000-000000000000", headers=user.headers)
+        assert res.status_code == 404
+
+    def test_clear_all_history(self, client, user, dataset):
+        run_query(client, user, "How many rows?", dataset["id"])
+        run_query(client, user, "Analyze this dataset", dataset["id"])
+        res = client.delete("/api/query/history", headers=user.headers)
+        assert res.status_code == 200
+        assert client.get("/api/query/history", headers=user.headers).json()["total"] == 0
+
+    def test_clear_history_requires_auth(self, client):
+        res = client.delete("/api/query/history")
+        assert res.status_code == 401
+
+
 class TestHealth:
     def test_health_public(self, client):
         res = client.get("/api/health")

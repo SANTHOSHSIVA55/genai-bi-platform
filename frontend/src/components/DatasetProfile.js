@@ -23,16 +23,11 @@ const TYPE_LABELS = {
   id: 'ID',
 };
 
+import SkeletonLoader from './SkeletonLoader';
+
 const DatasetProfile = ({ profile, datasetName, loading }) => {
   if (loading) {
-    return (
-      <div className="glass-card p-5">
-        <div className="flex items-center gap-2 text-dark-500 text-sm">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Analyzing dataset...
-        </div>
-      </div>
-    );
+    return <SkeletonLoader.ProfileSkeleton />;
   }
 
   if (!profile || !profile.overview) return null;

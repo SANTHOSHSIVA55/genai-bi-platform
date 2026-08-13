@@ -1,244 +1,141 @@
-import React, { useRef, useMemo, Suspense } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { Float, MeshDistortMaterial, MeshWobbleMaterial, Sphere, Torus, Icosahedron, Octahedron } from '@react-three/drei';
-import * as THREE from 'three';
+import React from 'react';
 
-/* ───── Floating Data Sphere ───── */
-const DataSphere = ({ position = [0, 0, 0], color = '#ff3b30', speed = 1 }) => {
-  const meshRef = useRef();
-  useFrame((state) => {
-    if (meshRef.current) {
-      meshRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.3 * speed) * 0.3;
-      meshRef.current.rotation.y += 0.005 * speed;
-    }
-  });
-  return (
-    <Float speed={2} rotationIntensity={0.5} floatIntensity={1}>
-      <Sphere ref={meshRef} args={[1, 64, 64]} position={position}>
-        <MeshDistortMaterial
-          color={color}
-          roughness={0.1}
-          metalness={0.8}
-          distort={0.3}
-          speed={2}
-          transparent
-          opacity={0.7}
-        />
-      </Sphere>
-    </Float>
-  );
-};
+/* ───── Ambient Pulsing Blob ───── */
+// Static blurred gradient blob. Kept as a static layer instead of an infinite
+// CSS animation: a `blur(100px)` element repainting continuously is a real
+// GPU/CPU cost on low-end machines and contributes to jank while scrolling.
+const AmbientBlob = ({ className = '', style = {} }) => (
+  <div
+    className={`absolute rounded-full filter blur-[60px] opacity-20 ${className}`}
+    style={style}
+  />
+);
 
-/* ───── Orbiting Ring ───── */
-const OrbitRing = ({ radius = 2, color = '#ff6b6b', speed = 0.5, thickness = 0.03 }) => {
-  const ringRef = useRef();
-  useFrame((state) => {
-    if (ringRef.current) {
-      ringRef.current.rotation.x = Math.PI / 2 + Math.sin(state.clock.elapsedTime * speed) * 0.3;
-      ringRef.current.rotation.z += 0.003;
-    }
-  });
-  return (
-    <Torus ref={ringRef} args={[radius, thickness, 16, 100]}>
-      <meshStandardMaterial color={color} transparent opacity={0.6} emissive={color} emissiveIntensity={0.3} />
-    </Torus>
-  );
-};
+/* ───── Rotating SVG Ring ───── */
+const SVGRing = ({ size = 200, color = '#ff3b30', duration = 20, reverse = false }) => (
+  <div
+    className="absolute inset-0 flex items-center justify-center pointer-events-none"
+    style={{
+      animation: `spin ${duration}s linear infinite ${reverse ? 'reverse' : ''}`,
+    }}
+  >
+    <svg width={size} height={size} viewBox="0 0 100 100" className="opacity-40">
+      <circle
+        cx="50"
+        cy="50"
+        r="45"
+        fill="none"
+        stroke={color}
+        strokeWidth="0.5"
+        strokeDasharray="4 8"
+      />
+    </svg>
+  </div>
+);
 
-/* ───── Data Particles ───── */
-const DataParticles = ({ count = 200 }) => {
-  const pointsRef = useRef();
-  const positions = useMemo(() => {
-    const pos = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      pos[i * 3] = (Math.random() - 0.5) * 15;
-      pos[i * 3 + 1] = (Math.random() - 0.5) * 15;
-      pos[i * 3 + 2] = (Math.random() - 0.5) * 15;
-    }
-    return pos;
-  }, [count]);
+/* ───── Neural SVG Network ───── */
+const SVGNetwork = () => (
+  <svg className="absolute inset-0 w-full h-full opacity-[0.15]" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="netLine" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stopColor="#ff3b30" stopOpacity="0.8" />
+        <stop offset="100%" stopColor="#ff9500" stopOpacity="0.1" />
+      </linearGradient>
+    </defs>
+    <g className="animate-[pulse_8s_infinite]">
+      <circle cx="20%" cy="30%" r="3" fill="#ff3b30" />
+      <circle cx="35%" cy="20%" r="4" fill="#ff9500" />
+      <circle cx="50%" cy="40%" r="3" fill="#ff2d55" />
+      <circle cx="65%" cy="25%" r="5" fill="#ff3b30" />
+      <circle cx="40%" cy="60%" r="3" fill="#ff2d55" />
+      <circle cx="60%" cy="70%" r="4" fill="#ff9500" />
+      <circle cx="75%" cy="50%" r="3" fill="#ff3b30" />
 
-  const colors = useMemo(() => {
-    const cols = new Float32Array(count * 3);
-    const palette = [
-      new THREE.Color('#ff3b30'),
-      new THREE.Color('#ff6b6b'),
-      new THREE.Color('#c41a1a'),
-      new THREE.Color('#ff9500'),
-      new THREE.Color('#ff2d55'),
-    ];
-    for (let i = 0; i < count; i++) {
-      const c = palette[Math.floor(Math.random() * palette.length)];
-      cols[i * 3] = c.r;
-      cols[i * 3 + 1] = c.g;
-      cols[i * 3 + 2] = c.b;
-    }
-    return cols;
-  }, [count]);
-
-  useFrame((state) => {
-    if (pointsRef.current) {
-      pointsRef.current.rotation.y += 0.0005;
-      pointsRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.1) * 0.1;
-    }
-  });
-
-  return (
-    <points ref={pointsRef}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" count={count} array={positions} itemSize={3} />
-        <bufferAttribute attach="attributes-color" count={count} array={colors} itemSize={3} />
-      </bufferGeometry>
-      <pointsMaterial size={0.05} vertexColors transparent opacity={0.8} sizeAttenuation />
-    </points>
-  );
-};
-
-/* ───── Wireframe Icosahedron ───── */
-const WireGeo = ({ position = [0, 0, 0], color = '#ff6b6b', scale = 1 }) => {
-  const ref = useRef();
-  useFrame((state) => {
-    if (ref.current) {
-      ref.current.rotation.x += 0.003;
-      ref.current.rotation.y += 0.005;
-      ref.current.scale.setScalar(scale + Math.sin(state.clock.elapsedTime) * 0.05);
-    }
-  });
-  return (
-    <Float speed={1.5} floatIntensity={0.5}>
-      <Icosahedron ref={ref} args={[1, 1]} position={position}>
-        <meshStandardMaterial color={color} wireframe transparent opacity={0.4} emissive={color} emissiveIntensity={0.2} />
-      </Icosahedron>
-    </Float>
-  );
-};
-
-/* ───── Neural Node ───── */
-const NeuralNode = ({ position, color = '#ff3b30' }) => {
-  const ref = useRef();
-  useFrame((state) => {
-    if (ref.current) {
-      ref.current.scale.setScalar(0.08 + Math.sin(state.clock.elapsedTime * 2 + position[0]) * 0.02);
-    }
-  });
-  return (
-    <mesh ref={ref} position={position}>
-      <sphereGeometry args={[1, 16, 16]} />
-      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} transparent opacity={0.8} />
-    </mesh>
-  );
-};
-
-/* ───── Floating Octahedron (AI Brain) ───── */
-const AIBrain = ({ position = [0, 0, 0], scale = 1 }) => {
-  const ref = useRef();
-  useFrame((state) => {
-    if (ref.current) {
-      ref.current.rotation.y += 0.008;
-      ref.current.rotation.z = Math.sin(state.clock.elapsedTime * 0.5) * 0.2;
-    }
-  });
-  return (
-    <Float speed={2} rotationIntensity={0.3} floatIntensity={1.2}>
-      <Octahedron ref={ref} args={[1]} position={position} scale={scale}>
-        <MeshWobbleMaterial
-          color="#ff2d55"
-          roughness={0.1}
-          metalness={0.9}
-          factor={0.2}
-          speed={1.5}
-          transparent
-          opacity={0.6}
-        />
-      </Octahedron>
-    </Float>
-  );
-};
+      <line x1="20%" y1="30%" x2="35%" y2="20%" stroke="url(#netLine)" strokeWidth="1" />
+      <line x1="35%" y1="20%" x2="50%" y2="40%" stroke="url(#netLine)" strokeWidth="1" />
+      <line x1="50%" y1="40%" x2="65%" y2="25%" stroke="url(#netLine)" strokeWidth="1" />
+      <line x1="50%" y1="40%" x2="40%" y2="60%" stroke="url(#netLine)" strokeWidth="1" />
+      <line x1="40%" y1="60%" x2="60%" y2="70%" stroke="url(#netLine)" strokeWidth="1" />
+      <line x1="60%" y1="70%" x2="75%" y2="50%" stroke="url(#netLine)" strokeWidth="1" />
+    </g>
+  </svg>
+);
 
 /* ═══════ SCENE PRESETS ═══════ */
 
 // Landing Page — big hero scene
 export const HeroScene = () => (
-  <Canvas
-    camera={{ position: [0, 0, 8], fov: 60 }}
-    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'auto' }}
-    gl={{ alpha: true, antialias: true }}
-  >
-    <ambientLight intensity={0.3} />
-    <pointLight position={[10, 10, 10]} intensity={1} color="#ff3b30" />
-    <pointLight position={[-10, -5, 5]} intensity={0.5} color="#c41a1a" />
-    <spotLight position={[5, 5, 5]} angle={0.3} penumbra={1} intensity={0.8} color="#ff6b6b" />
-    <Suspense fallback={null}>
-      <DataSphere position={[0, 0.3, 0]} color="#ff3b30" speed={0.8} />
-      <OrbitRing radius={2} color="#ff6b6b" speed={0.3} />
-      <OrbitRing radius={2.5} color="#c41a1a" speed={0.5} thickness={0.02} />
-      <OrbitRing radius={3} color="#ff9500" speed={0.2} thickness={0.01} />
-      <WireGeo position={[3.5, 1.5, -2]} color="#ff2d55" scale={0.7} />
-      <WireGeo position={[-3.5, -1, -1]} color="#ff9500" scale={0.5} />
-      <AIBrain position={[-2.5, 2, -1]} scale={0.4} />
-      <DataParticles count={300} />
-    </Suspense>
-  </Canvas>
+  <div className="absolute inset-0 bg-dark-950 overflow-hidden select-none pointer-events-none">
+    {/* Animated glow blobs */}
+    <AmbientBlob className="bg-primary-600/10 w-[600px] h-[600px] -top-[10%] -left-[10%]" style={{ animationDuration: '8s' }} />
+    <AmbientBlob className="bg-red-600/10 w-[500px] h-[500px] top-[30%] -right-[10%]" style={{ animationDuration: '12s' }} />
+    <AmbientBlob className="bg-primary-800/10 w-[700px] h-[700px] -bottom-[20%] left-[20%]" style={{ animationDuration: '15s' }} />
+
+    {/* Elegant interactive circles */}
+    <div className="absolute inset-0 flex items-center justify-center">
+      <div className="relative w-[300px] h-[300px]">
+        <SVGRing size={300} color="#ff3b30" duration={30} />
+        <SVGRing size={360} color="#ff9500" duration={45} reverse />
+        <SVGRing size={420} color="#ff2d55" duration={60} />
+        {/* Glowing center sphere */}
+        <div className="absolute inset-0 m-auto w-32 h-32 rounded-full bg-gradient-to-br from-primary-500 to-red-600 opacity-60 blur-md animate-[pulse_4s_infinite]" />
+      </div>
+    </div>
+
+    {/* SVG background grid */}
+    <div className="absolute inset-0 opacity-[0.03] bg-[linear-gradient(to_right,#808080_1px,transparent_1px),linear-gradient(to_bottom,#808080_1px,transparent_1px)] bg-[size:24px_24px]" />
+    <SVGNetwork />
+  </div>
 );
 
 // Dashboard — subtle background scene
 export const DashboardScene = () => (
-  <Canvas
-    camera={{ position: [0, 0, 6], fov: 50 }}
-    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
-    gl={{ alpha: true, antialias: true }}
-  >
-    <ambientLight intensity={0.2} />
-    <pointLight position={[5, 5, 5]} intensity={0.5} color="#ff3b30" />
-    <Suspense fallback={null}>
-      <DataParticles count={150} />
-      <WireGeo position={[4, 2, -3]} color="#ff6b6b" scale={0.4} />
-      <WireGeo position={[-4, -2, -2]} color="#c41a1a" scale={0.3} />
-      <OrbitRing radius={5} color="#48484a" speed={0.1} thickness={0.01} />
-    </Suspense>
-  </Canvas>
+  <div className="absolute inset-0 bg-dark-950 overflow-hidden select-none pointer-events-none">
+    <AmbientBlob className="bg-primary-600/5 w-[500px] h-[500px] top-[10%] left-[10%]" style={{ animationDuration: '15s' }} />
+    <AmbientBlob className="bg-red-600/5 w-[400px] h-[400px] bottom-[10%] right-[10%]" style={{ animationDuration: '20s' }} />
+    <div className="absolute inset-0 opacity-[0.015] bg-[linear-gradient(to_right,#808080_1px,transparent_1px),linear-gradient(to_bottom,#808080_1px,transparent_1px)] bg-[size:32px_32px]" />
+  </div>
 );
 
 // Auth pages — elegant scene
 export const AuthScene = () => (
-  <Canvas
-    camera={{ position: [0, 0, 6], fov: 50 }}
-    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
-    gl={{ alpha: true, antialias: true }}
-  >
-    <ambientLight intensity={0.2} />
-    <pointLight position={[5, 5, 5]} intensity={0.6} color="#ff3b30" />
-    <pointLight position={[-5, -5, 5]} intensity={0.4} color="#c41a1a" />
-    <Suspense fallback={null}>
-      <AIBrain position={[3, 1.5, -1]} scale={0.5} />
-      <WireGeo position={[-3, -1.5, -2]} color="#ff6b6b" scale={0.6} />
-      <DataParticles count={100} />
-      <OrbitRing radius={3} color="#48484a" speed={0.15} thickness={0.01} />
-    </Suspense>
-  </Canvas>
+  <div className="absolute inset-0 bg-dark-950 overflow-hidden select-none pointer-events-none">
+    <AmbientBlob className="bg-primary-600/8 w-[400px] h-[400px] -top-[10%] -left-[10%]" style={{ animationDuration: '12s' }} />
+    <AmbientBlob className="bg-red-600/8 w-[400px] h-[400px] -bottom-[10%] -right-[10%]" style={{ animationDuration: '16s' }} />
+  </div>
 );
 
 // Mini 3D widget for cards
-export const MiniDataViz = ({ type = 'sphere' }) => (
-  <Canvas
-    camera={{ position: [0, 0, 3], fov: 50 }}
-    style={{ width: '100%', height: '100%' }}
-    gl={{ alpha: true, antialias: true }}
-  >
-    <ambientLight intensity={0.4} />
-    <pointLight position={[3, 3, 3]} intensity={0.8} color="#ff3b30" />
-    <Suspense fallback={null}>
-      {type === 'sphere' && <DataSphere position={[0, 0, 0]} color="#ff3b30" speed={0.6} />}
-      {type === 'brain' && <AIBrain position={[0, 0, 0]} scale={0.8} />}
-      {type === 'wire' && <WireGeo position={[0, 0, 0]} color="#ff6b6b" scale={1} />}
-      {type === 'ring' && (
-        <>
-          <OrbitRing radius={1} color="#ff6b6b" speed={0.5} thickness={0.03} />
-          <OrbitRing radius={1.3} color="#c41a1a" speed={0.3} thickness={0.02} />
-        </>
+export const MiniDataViz = ({ type = 'sphere' }) => {
+  return (
+    <div className="w-full h-full flex items-center justify-center bg-dark-900/30 rounded-xl overflow-hidden relative border border-white/[0.02]">
+      {type === 'sphere' && (
+        <div className="relative w-16 h-16">
+          <div className="absolute inset-0 rounded-full bg-gradient-to-br from-primary-500 to-red-600 opacity-70 animate-pulse blur-[2px]" />
+          <div className="absolute inset-2 rounded-full border border-white/20 animate-spin" style={{ animationDuration: '3s' }} />
+        </div>
       )}
-    </Suspense>
-  </Canvas>
-);
+      {type === 'brain' && (
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ff2d55" strokeWidth="1.5" className="animate-pulse">
+          <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
+          <path d="M12 6v12" />
+          <path d="M8 10h8" />
+          <path d="M8 14h8" />
+        </svg>
+      )}
+      {type === 'wire' && (
+        <div className="relative w-14 h-14 border border-primary-500/30 rounded-xl animate-[spin_6s_linear_infinite] flex items-center justify-center">
+          <div className="w-8 h-8 border border-red-500/30 rounded-lg animate-[spin_3s_linear_infinite_reverse]" />
+        </div>
+      )}
+      {type === 'ring' && (
+        <div className="relative w-16 h-16 flex items-center justify-center">
+          <div className="absolute w-12 h-12 rounded-full border border-dashed border-primary-500/40 animate-spin" style={{ animationDuration: '4s' }} />
+          <div className="absolute w-8 h-8 rounded-full border border-dashed border-red-500/40 animate-spin" style={{ animationDuration: '6s', animationDirection: 'reverse' }} />
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default HeroScene;
