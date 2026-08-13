@@ -75,10 +75,13 @@ def validate_result(question: str, result_columns: list, result_rows: list,
     wants_percent = _matches(q, _PERCENT_PATTERNS)
 
     # 1. Measure question answered with a bare count (critical wrong-answer
-    #    pattern: "average salary" -> COUNT(*)).
+    #    pattern: "average salary" -> COUNT(*)). A count is only wrong when it
+    #    is the entire result: a grouped breakdown ("total customers by
+    #    country") or a result that also carries a real measure column is a
+    #    legitimate answer to a measure question.
     if wants_measure and not is_count_question:
         count_cols = [c for c, st in semantics.items() if st == "count"]
-        if count_cols and _only_aggregate_columns(result_columns, semantics):
+        if count_cols and len(count_cols) == len(result_columns or []):
             issues.append(
                 f"Question asks for a measure ('{question.strip()}') but the result is a record "
                 f"count ({', '.join(count_cols)}). A count is not a valid answer for a measure question."

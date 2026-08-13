@@ -138,6 +138,41 @@ class TestQuestionResultValidation:
                             'SELECT COUNT(*) AS total_count FROM "Customers"')
         assert v["status"] == "valid"
 
+    def test_grouped_metric_by_dimension_is_valid(self):
+        # Regression: "total quantity by country" (a grouped measure) must not
+        # be rejected because the dimension column is named "country".
+        v = validate_result("Show total quantity by country",
+                            ["country", "total_quantity"],
+                            [{"country": "UK", "total_quantity": 8.0},
+                             {"country": "Germany", "total_quantity": 7.0}],
+                            [{"name": "Country", "type": "categorical"}],
+                            'SELECT b."country" AS "country", ROUND(SUM(a."quantity"), 2) AS total_quantity '
+                            'FROM "Orders" a JOIN "Customers" b ON a."customerid" = b."customerid" '
+                            'GROUP BY b."country" ORDER BY total_quantity DESC')
+        assert v["status"] == "valid"
+
+    def test_grouped_count_by_dimension_is_valid(self):
+        # "total customers by country" is a legitimate grouped breakdown, not a
+        # bare count answering a measure question.
+        v = validate_result("Show total customers by country",
+                            ["country", "total_customers"],
+                            [{"country": "UK", "total_customers": 3},
+                             {"country": "Germany", "total_customers": 4}],
+                            [{"name": "Country", "type": "categorical"}],
+                            'SELECT "country", COUNT(*) AS total_customers FROM "Customers" GROUP BY "country"')
+        assert v["status"] != "invalid"
+
+    def test_country_column_is_not_typed_as_count(self):
+        from ai.semantics import analyze_sql_semantics
+        sem = analyze_sql_semantics(
+            'SELECT b."country" AS "country", SUM(a."quantity") AS total_quantity '
+            'FROM "Orders" a JOIN "Customers" b ON a."customerid" = b."customerid" '
+            'GROUP BY b."country"',
+            ["country", "total_quantity"],
+            [{"name": "Country", "type": "categorical"}],
+            [{"country": "UK", "total_quantity": 8}])
+        assert sem["country"] != "count"
+
     def test_co_purchase_answered_with_single_count_is_invalid(self):
         v = validate_result("Which products are purchased together?", ["times_together"], [{"times_together": 5}], [],
                             "SELECT COUNT(DISTINCT oid) AS times_together FROM \"Orders\"")

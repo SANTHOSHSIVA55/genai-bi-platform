@@ -38,10 +38,18 @@ def is_monetary_name(name: str) -> bool:
     return any(k in low for k in _MONETARY_KEYWORDS)
 
 
+# "count" matched only as a whole word (boundary-separated), so country /
+# account / counter / discount never qualify as record counts.
+_COUNT_WORD_RE = re.compile(r"(^|[_\-/\s\d])count(s|ed)?($|[_\-/\s\d])")
+_COUNT_CAMEL_RE = re.compile(r"[a-z\d_]Count(s|ed)?$")
+
+
 def is_count_name(name: str) -> bool:
     """True when a column name clearly denotes a record count."""
     low = name.lower()
-    if "count" in low:
+    if _COUNT_WORD_RE.search(low):
+        return True
+    if _COUNT_CAMEL_RE.search(name):
         return True
     if low.startswith("unique_") or low.startswith("distinct_"):
         return True
