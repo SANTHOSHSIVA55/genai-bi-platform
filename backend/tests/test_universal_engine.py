@@ -27,7 +27,7 @@ from ai.profile import detect_currency
 from ai.semantics import analyze_sql_semantics, format_semantic_value
 from ai.sql_generator import _canonicalize_table_refs, _local_nl_to_sql
 from ai.sql_validator import validate_sql_intent
-from data_cleaner import assess_data_quality, read_uploaded_file
+from data_cleaner import assess_data_quality, get_column_info, read_uploaded_file
 from conftest import _unique, upload_csv
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -337,6 +337,22 @@ class TestMultiFormatIngestion:
         df = read_uploaded_file(buf.getvalue(), "book.xlsx")
         assert list(df.columns) == ["a", "b"]
         assert len(df) == 4
+
+    def test_xlsx_with_datetime_columns_serializes_columns_info(self):
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            pd.DataFrame({
+                "Order Date": pd.to_datetime(["2024-01-15", "2024-02-01", None]),
+                "Name": ["A", "B", "C"],
+                "Amount": [1.5, 2.5, None],
+            }).to_excel(writer, sheet_name="Data", index=False)
+        df = read_uploaded_file(buf.getvalue(), "book.xlsx")
+        info = json.loads(get_column_info(df))
+        for col in info:
+            json.dumps(col["sample_values"])  # must not raise
+        date_col = next(c for c in info if c["name"] == "Order Date")
+        assert all(isinstance(v, str) for v in date_col["sample_values"])
+        assert date_col["sample_values"][0].startswith("2024-")
 
     def test_csv_fallback_encoding(self):
         content = "name,value\n" + "caf\xe9,1\n".encode("latin-1").decode("latin-1") + "\n"

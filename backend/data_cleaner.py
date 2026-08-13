@@ -331,7 +331,32 @@ def analyze_dataset(df: pd.DataFrame) -> dict:
     return analysis
 
 
+def _json_safe(value):
+    """Convert pandas/numpy scalars into JSON-serializable primitives."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, pd.Timedelta):
+        return str(value)
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            return str(value)
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
 def get_column_info(df: pd.DataFrame) -> str:
     """Generate column metadata as JSON string."""
     analysis = analyze_dataset(df)
+    for col in analysis["columns"]:
+        col["sample_values"] = [_json_safe(v) for v in col["sample_values"]]
     return json.dumps(analysis["columns"])

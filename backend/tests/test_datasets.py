@@ -1,5 +1,7 @@
 import io
 
+import pandas as pd
+
 from conftest import _unique, upload_csv
 
 
@@ -11,6 +13,24 @@ class TestUpload:
         assert ds["file_type"] == "csv"
         assert ds["name"]
         assert ds["table_name"].startswith("ds_")
+
+    def test_upload_xlsx_with_datetime_column(self, client, user):
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            pd.DataFrame({
+                "Order Date": pd.to_datetime(["2024-01-15", "2024-02-01", None]),
+                "Product": ["A", "B", "C"],
+                "Amount": [10.5, 20.0, 30.25],
+            }).to_excel(writer, sheet_name="Data", index=False)
+        files = {"file": ("book.xlsx", io.BytesIO(buf.getvalue()), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        data = {"name": _unique("ds")}
+        res = client.post("/api/data/upload", files=files, data=data, headers=user.headers)
+        assert res.status_code == 200, res.text
+        ds = res.json()
+        assert ds["row_count"] == 3
+        assert ds["column_count"] == 3
+        assert ds["file_type"] == "xlsx"
+        assert ds["columns_info"]
 
     def test_upload_requires_auth(self, client):
         files = {"file": ("data.csv", io.BytesIO(b"a,b\n1,2\n"), "text/csv")}
