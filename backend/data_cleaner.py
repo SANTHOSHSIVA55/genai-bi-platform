@@ -193,10 +193,33 @@ def assess_data_quality(df: pd.DataFrame) -> dict:
     }
 
 
+def _dedupe_columns(names):
+    """Ensure every sanitized column name is unique.
+
+    ``item``, ``ITEM`` and ``item `` all sanitize to ``item``; duplicates make
+    ``df[col]`` return a DataFrame and break cleaning, metadata and ``to_sql``.
+    """
+    counts = {}
+    out = []
+    for n in names:
+        if n not in counts:
+            counts[n] = 0
+            out.append(n)
+        else:
+            counts[n] += 1
+            candidate = f"{n}_{counts[n]}"
+            while candidate in counts:
+                counts[n] += 1
+                candidate = f"{n}_{counts[n]}"
+            counts[candidate] = 0
+            out.append(candidate)
+    return out
+
+
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """Apply comprehensive data cleaning."""
     # 1. Sanitize column names
-    df.columns = [sanitize_column_name(col) for col in df.columns]
+    df.columns = _dedupe_columns([sanitize_column_name(col) for col in df.columns])
 
     # 2. Remove fully empty rows and columns
     df = df.dropna(how="all")

@@ -32,6 +32,17 @@ class TestUpload:
         assert ds["file_type"] == "xlsx"
         assert ds["columns_info"]
 
+    def test_upload_csv_with_colliding_column_names(self, client, user):
+        content = "item,ITEM,item \n1,10,1.5\n2,20,2.5\n3,30,3.5\n"
+        files = {"file": ("dup.csv", io.BytesIO(content.encode()), "text/csv")}
+        data = {"name": _unique("ds")}
+        res = client.post("/api/data/upload", files=files, data=data, headers=user.headers)
+        assert res.status_code == 200, res.text
+        ds = res.json()
+        assert ds["row_count"] == 3
+        assert ds["column_count"] == 3
+        assert ds["columns_info"]
+
     def test_upload_requires_auth(self, client):
         files = {"file": ("data.csv", io.BytesIO(b"a,b\n1,2\n"), "text/csv")}
         res = client.post("/api/data/upload", files=files, data={"name": "x"})

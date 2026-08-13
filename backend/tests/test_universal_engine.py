@@ -27,7 +27,7 @@ from ai.profile import detect_currency
 from ai.semantics import analyze_sql_semantics, format_semantic_value
 from ai.sql_generator import _canonicalize_table_refs, _local_nl_to_sql
 from ai.sql_validator import validate_sql_intent
-from data_cleaner import assess_data_quality, get_column_info, read_uploaded_file
+from data_cleaner import assess_data_quality, clean_dataframe, get_column_info, read_uploaded_file
 from conftest import _unique, upload_csv
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -367,6 +367,15 @@ class TestMultiFormatIngestion:
         assert q["missing_cells"] >= 1
         assert q["warnings"]
         assert q["issues_count"] > 0
+
+    def test_colliding_sanitized_column_names_are_deduplicated(self):
+        content = "item,ITEM,item \n1,10,1.5\n2,20,2.5\n3,30,3.5\n"
+        df = read_uploaded_file(content.encode(), "dup.csv")
+        cleaned = clean_dataframe(df)
+        assert len(cleaned.columns) == len(set(cleaned.columns)) == 3
+        assert all(c.startswith("item") for c in cleaned.columns)
+        info = json.loads(get_column_info(cleaned))
+        assert len(info) == 3
 
 
 # ─── End-to-end API: Suppliers regression ──────────────────────────────────
