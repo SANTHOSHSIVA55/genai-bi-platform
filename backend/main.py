@@ -583,8 +583,10 @@ def dataset_rows(
         params["search"] = f"%{search}%"
     if safe_sort:
         sql += f' ORDER BY "{safe_sort}" {"ASC" if sort_dir == "asc" else "DESC"} NULLS LAST'
-    else:
-        sql += ' ORDER BY rowid'
+    elif col_names:
+        # Deterministic default order. `rowid` is SQLite-only and does not exist
+        # on Postgres, so order by the first real column instead.
+        sql += f' ORDER BY "{col_names[0]}" ASC NULLS LAST'
     sql += f" LIMIT {page_size} OFFSET {(page - 1) * page_size}"
 
     validated_sql = validate_sql(sql, allowed_tables=[dataset.table_name])

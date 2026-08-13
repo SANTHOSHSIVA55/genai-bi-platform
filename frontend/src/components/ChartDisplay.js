@@ -134,8 +134,12 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
     return data.filter(row => row && typeof row === 'object');
   }, [data]);
 
+  const autoChartType = chartConfig?.chart_type || 'table';
+  const chartType = selectedChartType === 'auto' ? autoChartType : selectedChartType;
+
   // Chart data is capped independently from the raw table so the SVG stays
-  // cheap to render and animate on large result sets.
+  // cheap to render and animate on large result sets. `chartType` must be
+  // declared above this memo (TDZ: referencing a later const crashes render).
   const chartData = useMemo(() => {
     const cap = chartType === 'scatter' ? SCATTER_DATA_CAP : CHART_DATA_CAP;
     return safeData.length > cap ? safeData.slice(0, cap) : safeData;
@@ -162,9 +166,6 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
   }, [money, currency, semanticTypes]);
 
   if (safeData.length === 0 || !chartConfig) return null;
-
-  const autoChartType = chartConfig.chart_type || 'table';
-  const chartType = selectedChartType === 'auto' ? autoChartType : selectedChartType;
 
   const columns = useMemo(
     () => (safeData.length > 0 ? Object.keys(safeData[0]) : []),
@@ -317,7 +318,7 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
   const renderLineChart = () => (
     <ResponsiveContainer width="100%" height={400}>
       <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-        <CartesianGrid {...gridStyle} />
+        <CartesianGrid {...GRID_STYLE} />
         <XAxis dataKey={xKey} tick={TICK_STYLE} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
         <YAxis tick={TICK_STYLE} tickFormatter={axisTick} />
         <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
@@ -340,7 +341,7 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
   const renderAreaChart = () => (
     <ResponsiveContainer width="100%" height={400}>
       <AreaChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-        <CartesianGrid {...gridStyle} />
+        <CartesianGrid {...GRID_STYLE} />
         <XAxis dataKey={xKey} tick={TICK_STYLE} angle={chartData.length > 8 ? -35 : 0} textAnchor="end" interval={0} />
         <YAxis tick={TICK_STYLE} tickFormatter={axisTick} />
         <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
@@ -386,7 +387,7 @@ const ChartDisplay = ({ data, chartConfig, intentType, currency, semanticTypes }
   const renderScatterChart = () => (
     <ResponsiveContainer width="100%" height={400}>
       <ScatterChart margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-        <CartesianGrid {...gridStyle} />
+        <CartesianGrid {...GRID_STYLE} />
         <XAxis type="category" dataKey={xKey} name={xKey} tick={TICK_STYLE} />
         <YAxis type="number" dataKey={yKey} name={yKey} tick={TICK_STYLE} tickFormatter={axisTick} />
         <Tooltip content={<CustomTooltip renderValue={renderValue} />} />
